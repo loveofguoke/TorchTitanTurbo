@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "torchtitanturbo"
+version = "0.1.0"
+description = "NPU-optimized converters for TorchTitan"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "torchtitan",
+    "torch-npu",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["torchtitanturbo*"]
+
+[tool.setuptools.package-data]
+torchtitanturbo = ["py.typed"]
