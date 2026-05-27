@@ -21,7 +21,6 @@ def npu_grouped_mm(x, weight, group_list):
 def _run_experts_grouped_mm(
     w13: torch.Tensor,
     w2: torch.Tensor,
-    _w3: torch.Tensor,
     x: torch.Tensor,
     num_tokens_per_expert: torch.Tensor,
     swiglu_limit: float | None = None,
@@ -98,12 +97,17 @@ class NpuGroupedExperts(Module):
 
         return out
 
-    def forward(self, x, top_scores, selected_experts_indices, shared_experts=None):
+    def forward(self, x, top_scores, selected_experts_indices):
+        bs, slen, dim = x.shape
+        top_k = top_scores.size(-1)
+        x = x.view(bs * slen, dim)
+        top_scores = top_scores.view(bs * slen, top_k)
+        selected_experts_indices = selected_experts_indices.view(bs * slen, top_k)
         routed_input, num_tokens_local, metadata = self.token_dispatcher.dispatch(
             x, top_scores, selected_experts_indices
         )
         routed_output = self._experts_forward(routed_input, num_tokens_local)
-        return self.token_dispatcher.combine(routed_output, metadata, x, shared_experts)
+        return self.token_dispatcher.combine(routed_output, metadata, x)
 
     def _init_self_parameters(self):
         for name, param in self.named_parameters(recurse=False):

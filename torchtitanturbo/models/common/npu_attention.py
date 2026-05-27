@@ -35,6 +35,8 @@ class NpuScaledDotProductAttention(Module):
         is_causal: bool = True,
         **kwargs,
     ) -> torch.Tensor:
+        # Transpose to (bs, heads, seq, dim) for SDPA
+        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
         _, n_heads, seq_len, head_dim = q.shape
 
         if scale is None:
@@ -60,7 +62,8 @@ class NpuScaledDotProductAttention(Module):
             sync=True,
         )[0]
 
-        return output
+        # Transpose back to (bs, seq, heads, dim)
+        return output.transpose(1, 2)
 
 
 class NpuSDPAConverter(ModelConfigConverter):
