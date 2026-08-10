@@ -8,7 +8,7 @@ import torch_npu
 from torch import nn
 from torch.distributed.tensor import DTensor
 
-from torchtitan.models.common.moe import GroupedExperts
+from torchtitan.models.common.moe import GroupedExperts, RoutedExperts
 from torchtitan.protocols.model import ModelConfigConverter
 from torchtitan.protocols.module import Module
 from torchtitan.tools.logging import logger
@@ -48,7 +48,7 @@ class NpuGroupedExperts(Module):
         dim: int
         hidden_dim: int
         num_experts: int
-        token_dispatcher: GroupedExperts.Config.token_dispatcher
+        token_dispatcher: RoutedExperts.Config.token_dispatcher
         swiglu_limit: float | None = None
 
     def __init__(self, config: Config):
@@ -129,23 +129,21 @@ class NpuGroupedExpertsConverter(ModelConfigConverter):
 
     def convert(self, model_config) -> None:
         count = 0
-        for fqn, cfg, parent, attr in model_config.traverse(GroupedExperts.Config):
+        for fqn, cfg, parent, attr in model_config.traverse(RoutedExperts.Config):
+            inner = cfg.inner_experts
             new_config = NpuGroupedExperts.Config(
-                dim=cfg.dim,
-                hidden_dim=cfg.hidden_dim,
-                num_experts=cfg.num_experts,
+                dim=inner.dim,
+                hidden_dim=inner.hidden_dim,
+                num_experts=inner.num_experts,
                 token_dispatcher=cfg.token_dispatcher,
                 swiglu_limit=self.swiglu_limit,
             )
-            if hasattr(cfg, "param_init"):
-                new_config.param_init = cfg.param_init
-            if hasattr(cfg, "sharding_config"):
-                new_config.sharding_config = cfg.sharding_config
+            if hasattr(inner, "param_init"):
+                new_config.param_init = inner.param_init
+            if hasattr(inner, "sharding_config"):
+                new_config.sharding_config = inner.sharding_config
 
-            if isinstance(parent, list):
-                parent[attr] = new_config
-            else:
-                setattr(parent, attr, new_config)
+            cfg.inner_experts = new_config
             count += 1
 
         if count > 0:

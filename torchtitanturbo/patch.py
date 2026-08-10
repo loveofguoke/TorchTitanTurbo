@@ -3,11 +3,28 @@
 """Unified NPU patch entry point for TorchTitan.
 
 Applies all NPU-specific monkey patches at import time.
+
+Device-gated: on a host without an Ascend NPU backend, importing this package
+is a no-op, so GPU/CPU runs behave identically to plain torchtitan. The gating
+logic (``_npu_available``) was migrated here from the core repo's former
+``npu/adapt/patches.py`` (that directory is no longer used).
 """
 
 import os
 
+import torch
+
 from torchtitan.tools.logging import logger
+
+
+def _npu_available() -> bool:
+    """True when running on an Ascend NPU (torch_npu backend present)."""
+    try:
+        import torch_npu  # noqa: F401  registers the npu backend
+    except ImportError:
+        return False
+    npu_backend = getattr(torch, "npu", None)
+    return bool(npu_backend is not None and npu_backend.is_available())
 
 
 def set_environ_variable():
@@ -29,7 +46,17 @@ def set_environ_variable():
 
 
 def apply_all_patches():
-    """Apply all NPU patches."""
+    """Apply all NPU patches.
+
+    No-op (with a log line) when no Ascend NPU backend is available, so GPU/CPU
+    runs that import torchtitanturbo are not affected by NPU-specific patches.
+    """
+    if not _npu_available():
+        logger.info(
+            "torchtitanturbo: no Ascend NPU detected, skipping NPU patches"
+        )
+        return
+
     set_environ_variable()
 
     from torchtitanturbo.tools import apply_utils_patch, apply_profiler_patch

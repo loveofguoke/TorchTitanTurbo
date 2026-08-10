@@ -4,7 +4,59 @@
 
 import torch
 import torch_npu
+from torch.fx.experimental.symbolic_shapes import guard_or_false
+from torchtitan.models.common.rope import (
+    _reshape_for_broadcast as _original_reshape_for_broadcast,
+)
 from torchtitan.tools.logging import logger
+
+
+def npu_reshape_for_broadcast(
+    rope_cache: torch.Tensor,
+    query_shape: torch.Size | tuple[int, ...],
+    positions: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """NPU-safe version of ``torchtitan.models.common.rope._reshape_for_broadcast``.
+
+    The NPU ``aclnnGather`` does not support ``DT_COMPLEX64`` input. For complex
+    caches (ComplexRoPE) the general gather path is therefore performed on the
+    real/imag parts separately (float32, supported) and recombined with
+    ``torch.complex``. Non-complex caches (CosSinRoPE etc.) delegate to the
+    original implementation.
+    """
+    if not torch.is_complex(rope_cache):
+        return _original_reshape_for_broadcast(rope_cache, query_shape, positions)
+
+    ndim = len(query_shape)
+    assert ndim > 1
+    bsz, seqlen = query_shape[:2]
+    cache_width = rope_cache.shape[-1]
+    shape = [
+        d if i == 1 else cache_width if i == ndim - 1 else 1
+        for i, d in enumerate(query_shape)
+    ]
+
+    if positions is None:
+        return rope_cache[0:seqlen].view(*shape)
+
+    if guard_or_false(positions.size(0) == 1):
+        idx = positions.squeeze(0)
+        return torch.complex(rope_cache.real[idx], rope_cache.imag[idx]).view(*shape)
+
+    # Per-batch positions: general gather path on real/imag separately.
+    positions = positions.expand(bsz, -1)
+    index = positions.view(bsz, seqlen, 1, 1).expand(bsz, seqlen, 1, cache_width)
+    real = torch.gather(
+        rope_cache.real[None, :, None, :].expand(bsz, -1, -1, -1),
+        dim=1,
+        index=index,
+    )
+    imag = torch.gather(
+        rope_cache.imag[None, :, None, :].expand(bsz, -1, -1, -1),
+        dim=1,
+        index=index,
+    )
+    return torch.complex(real, imag)
 
 
 def _complex_to_interleaved_cos_sin(
@@ -222,6 +274,16 @@ def apply_patch():
     count = replace_functions(
         "apply_rotary_emb_single_complex",
         npu_apply_rotary_emb_single_complex,
+        package="torchtitan",
+    )
+    total_count += count
+
+    # Replace the cache reshape as well: aclnnGather has no DT_COMPLEX64
+    # support, so the complex cache gather in _reshape_for_broadcast must use
+    # the NPU-safe real/imag split (ComplexRoPE.forward hits this on NPU).
+    count = replace_functions(
+        "_reshape_for_broadcast",
+        npu_reshape_for_broadcast,
         package="torchtitan",
     )
     total_count += count
