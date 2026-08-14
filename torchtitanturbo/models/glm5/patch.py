@@ -30,7 +30,12 @@ def _gather_router_scores(
         _local_gather,
         out_placements=(scores_BLE.placements,),
         in_placements=(scores_BLE.placements, topk_expert_ids_BLK.placements),
-        in_grad_placements=(scores_BLE.placements, None),
+        # local_map requires placement metadata for every DTensor input,
+        # including integer routing indices that do not receive gradients.
+        in_grad_placements=(
+            scores_BLE.placements,
+            topk_expert_ids_BLK.placements,
+        ),
         device_mesh=scores_BLE.device_mesh,
     )
     return gather_local(scores_BLE, topk_expert_ids_BLK)
