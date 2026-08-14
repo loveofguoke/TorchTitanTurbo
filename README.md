@@ -38,6 +38,7 @@ This enables:
 - NPU peak flops calculation
 - NPU RoPE optimization
 - DeepSeek/Qwen3 model compatibility
+- GLM-5 NPU-safe DTensor router gather
 
 ### Training with NPU Optimizations
 
@@ -142,6 +143,7 @@ are properly replaced.
 | `_get_gradient_divide_factors` | `torch.distributed.fsdp` | - | NPU gradient handling |
 | `update_from_config` | `DeepSeekV3ModelArgs` | - | DeepSeek config |
 | `apply_non_moe_tp` | `qwen3.infra.parallelize` | - | Qwen3 TP |
+| GLM-5 router config factory | `torchtitan.models.glm5` | rank-local `gather` | Preserve TP/SP placements while avoiding the NPU DTensor gather backward shape bug |
 
 ## Training Configurations
 

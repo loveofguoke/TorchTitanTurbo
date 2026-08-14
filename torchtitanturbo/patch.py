@@ -62,7 +62,11 @@ def apply_all_patches():
     from torchtitanturbo.tools import apply_utils_patch, apply_profiler_patch
     from torchtitanturbo.distributed import apply_fsdp_patch
     from torchtitanturbo.models.common import apply_rope_patch
-    from torchtitanturbo.models import apply_deepseek_patch, apply_qwen3_patch
+    from torchtitanturbo.models import (
+        apply_deepseek_patch,
+        apply_glm5_patch,
+        apply_qwen3_patch,
+    )
 
     apply_utils_patch()
     apply_profiler_patch()
@@ -70,6 +74,7 @@ def apply_all_patches():
     apply_fsdp_patch()
     apply_deepseek_patch()
     apply_qwen3_patch()
+    apply_glm5_patch()
 
     logger.info("All NPU patches applied successfully")
 
