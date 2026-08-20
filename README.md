@@ -343,6 +343,48 @@ export MULTI_STREAM_MEMORY_REUSE="2"
 export CPU_AFFINITY_CONF="2"
 ```
 
+### Ascend profiler controls
+
+TorchTitan continues to own the common profiler schedule through
+`--profiler.*`. TorchTitanTurbo maps that lifecycle to Ascend Profiler and
+accepts NPU-only collection controls through environment variables:
+
+```bash
+export TORCHTITAN_NPU_PROFILER_LEVEL=level0
+export TORCHTITAN_NPU_PROFILER_RANKS=0
+export TORCHTITAN_NPU_PROFILER_RECORD_SHAPES=false
+export TORCHTITAN_NPU_PROFILER_PROFILE_MEMORY=false
+export TORCHTITAN_NPU_PROFILER_WITH_STACK=false
+export TORCHTITAN_NPU_PROFILER_WITH_MODULES=false
+export TORCHTITAN_NPU_PROFILER_PARSE_MODE=sync
+export TORCHTITAN_NPU_PROFILER_AIC_METRICS=none
+export TORCHTITAN_NPU_PROFILER_HOST_SYSTEM=none
+export TORCHTITAN_NPU_PROFILER_GC_DETECT_THRESHOLD=none
+```
+
+Supported levels are `level_none`, `level0`, `level1`, and `level2`. Rank
+selection accepts `all` or comma-separated global ranks. Parse mode is `sync`,
+`async`, or `offline`. Sync parsing can extend the profiled training step;
+async parsing avoids that blocking but its outputs may finish after training.
+Offline mode preserves raw `*_ascend_pt` data for later
+`torch_npu.profiler.profiler.analyse` processing. The legacy
+`TORCHTITAN_NPU_PROFILER_ONLINE_PARSE` switch remains supported.
+
+The parsed DB, CSV, and JSON outputs are intended for MindStudio Insight and
+msprof-analyze. The handler name is inherited from the upstream API; it does
+not mean TensorBoard is the preferred Ascend trace viewer. Host CPU, memory,
+disk, network, OS runtime, and NUMA collection is opt-in through
+`TORCHTITAN_NPU_PROFILER_HOST_SYSTEM` because those collectors add overhead
+and may require host permissions.
+
+For deep runtime diagnosis, set `GC_DETECT_THRESHOLD=1` to record Python GC
+events longer than one millisecond. MSTX collection and optional domain filters
+are exposed through `MSTX`, `MSTX_DOMAIN_INCLUDE`, and `MSTX_DOMAIN_EXCLUDE`;
+they remain disabled until the application adds MSTX marks.
+
+The runnable GLM performance probes and HTML reports live in the independent
+`torchtitan-test/tests/glm5_2_performance` framework.
+
 ## Contributing
 
 Contributions welcome! Areas for improvement:
