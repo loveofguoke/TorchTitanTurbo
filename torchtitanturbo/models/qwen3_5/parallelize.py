@@ -279,8 +279,8 @@ def parallelize_qwen3_5(
 ):
     """Apply TorchTitan parallelisms to Qwen3.5."""
     if parallel_dims.cp_enabled:
-        assert training.seq_len % (parallel_dims.cp * 2) == 0, (
-            f"Sequence length {training.seq_len} must be divisible by "
+        assert training.max_context_length % (parallel_dims.cp * 2) == 0, (
+            f"Sequence length {training.max_context_length} must be divisible by "
             f"2 * context_parallel_degree ({parallel_dims.cp})."
         )
 

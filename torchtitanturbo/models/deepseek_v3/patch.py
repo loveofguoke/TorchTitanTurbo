@@ -7,7 +7,7 @@ def _deepseek_update_from_config(self, job_config, **kwargs):
     """NPU-patched DeepSeek config update."""
     from torchtitan.config import JobConfig
 
-    seq_len = job_config.training.seq_len
+    seq_len = job_config.training.max_context_length
     if seq_len > self.max_seq_len:
         logger.warning(
             f"Sequence length {seq_len} exceeds original maximum {self.max_seq_len}."

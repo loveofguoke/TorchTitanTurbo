@@ -433,10 +433,15 @@ def build_memory_profiler_npu(self, *, global_step, base_folder, leaf_folder):
     snapshot_dir = os.path.join(base_folder, config.save_memory_snapshot_folder)
     os.makedirs(snapshot_dir, exist_ok=True)
     rank = _distributed_rank()
+    snapshot_freq = (
+        config.profile_freq
+        if config.memory_snapshot_freq is None
+        else config.memory_snapshot_freq
+    )
     logger.info(f"NPU memory snapshots will be saved at {snapshot_dir}")
     return NpuMemoryProfiler(
         global_step,
-        config.profile_freq,
+        snapshot_freq,
         snapshot_dir,
         leaf_folder,
         rank,

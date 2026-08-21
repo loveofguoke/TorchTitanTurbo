@@ -7,7 +7,6 @@ from torchtitan.config import (
     TrainingConfig,
 )
 from torchtitan.distributed import ParallelDims
-from torchtitan.distributed.tensor_parallel import maybe_enable_async_tp
 from torchtitan.experiments.graph_trainer.common_utils import (
     annotate_module_fqns,
     apply_simple_fsdp,
@@ -41,17 +40,14 @@ def parallelize_qwen3_5(
         raise NotImplementedError("Qwen3.5 graph_trainer EP is not enabled yet.")
 
     assert (
-        training.seq_len % parallel_dims.seq_len_divisor == 0
+        training.max_context_length % parallel_dims.seq_len_divisor == 0
     ), f"""
-        Sequence length {training.seq_len} must be divisible by the product of TP degree
+        Sequence length {training.max_context_length} must be divisible by the product of TP degree
         ({parallel_dims.tp}) and 2 * CP degree ({parallel_dims.cp}),
         i.e. {parallel_dims.seq_len_divisor}.
         """
 
     annotate_qwen3_5(model)
-
-    if parallel_dims.tp_enabled:
-        maybe_enable_async_tp(parallelism, compile_config, parallel_dims.get_mesh("tp"))
 
     # graph_trainer uses SimpleFSDP even when fsdp degree is 1 so parameter
     # casting follows the same path as existing llama3/qwen3 graph_trainer code.

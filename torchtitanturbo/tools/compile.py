@@ -23,11 +23,15 @@ def validate_npu_compile_config(compile_config: Any) -> None:
         raise ValueError("npugraphs prototype supports model compilation only")
 
 
-def npu_apply_compile(model, compile_config) -> None:
+def npu_apply_compile(model, *, compile_config, parallel_dims) -> None:
     """Validate the NPU backend and delegate compilation to TorchTitan."""
 
     validate_npu_compile_config(compile_config)
-    _ORIGINAL_APPLY_COMPILE(model, compile_config)
+    _ORIGINAL_APPLY_COMPILE(
+        model,
+        compile_config=compile_config,
+        parallel_dims=parallel_dims,
+    )
 
 
 def apply_patch() -> None:

@@ -25,7 +25,7 @@ from torchtitan.models.common.attention import (
 from torchtitan.models.common.decoder import Decoder
 from torchtitan.models.common.feed_forward import FeedForward
 from torchtitan.models.common.linear import Linear
-from torchtitan.models.common.rmsnorm import RMSNorm
+from torchtitan.models.common.nn_modules import RMSNorm
 from torchtitan.models.common.rope import _rotate_half
 from torchtitan.models.utils import (
     get_dense_model_nparams_and_flops,
@@ -868,7 +868,7 @@ class Qwen35Model(Decoder):
         enable_weight_tying: bool = False
 
         def update_from_config(self, *, trainer_config, **kwargs) -> None:
-            seq_len = trainer_config.training.seq_len
+            seq_len = trainer_config.training.max_context_length
             parallelism = trainer_config.parallelism
             if seq_len > self.rope.max_seq_len:
                 self.rope = dataclasses.replace(self.rope, max_seq_len=seq_len)

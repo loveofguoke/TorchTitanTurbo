@@ -4,26 +4,35 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-from torchtitan.components.checkpoint import CheckpointManager
-from torchtitan.components.loss import ChunkedCELoss
-from torchtitan.components.lr_scheduler import LRSchedulersContainer
+from torchtitan.components.checkpointer import CheckpointManager
+from torchtitan.components.data import ConcatThenSplitPackingConfig, GrainDataLoader
+from torchtitan.components.loss import ChunkedLossWrapper, CrossEntropyLoss
 from torchtitan.components.metrics import MetricsProcessor
-from torchtitan.components.optimizer import OptimizersContainer
-from torchtitan.config import ActivationCheckpointConfig, TrainingConfig
-from torchtitan.hf_datasets.text_datasets import HuggingFaceTextDataLoader
+from torchtitan.components.optimizer import default_adamw, LRSchedulersContainer
+from torchtitan.config import TrainingConfig
+from torchtitan.distributed.activation_checkpoint import FullAC, SelectiveAC
+from torchtitan.hf_datasets.text_datasets import DATASETS
+from torchtitan.models.common.config_utils import decoder_vocab_size
 from torchtitan.trainer import Trainer
 
 from . import model_registry
 
 
 def qwen3_5_debugmodel() -> Trainer.Config:
+    model_spec = model_registry("debugmodel")
     return Trainer.Config(
-        loss=ChunkedCELoss.Config(),
+        loss=ChunkedLossWrapper.Config(
+            loss_fn=CrossEntropyLoss.Config(
+                global_vocab_size=decoder_vocab_size(model_spec),
+            ),
+        ),
         hf_assets_path="./tests/assets/tokenizer",
         metrics=MetricsProcessor.Config(log_freq=1),
-        model_spec=model_registry("debugmodel"),
-        dataloader=HuggingFaceTextDataLoader.Config(dataset="c4_test"),
-        optimizer=OptimizersContainer.Config(lr=8e-4),
+        model_spec=model_spec,
+        dataloader=GrainDataLoader.Config(
+            dataset=ConcatThenSplitPackingConfig(dataset=DATASETS["c4_test"]),
+        ),
+        optimizer=default_adamw(lr=8e-4),
         lr_scheduler=LRSchedulersContainer.Config(
             warmup_steps=2,
             decay_ratio=0.8,
@@ -31,32 +40,37 @@ def qwen3_5_debugmodel() -> Trainer.Config:
             min_lr_factor=0.0,
         ),
         training=TrainingConfig(
-            local_batch_size=2,
-            seq_len=256,
+            num_tokens_per_microbatch_per_dp_rank=2 * 256,
+            max_context_length=256,
             steps=10,
         ),
         checkpoint=CheckpointManager.Config(
             interval=10,
             last_save_model_only=False,
         ),
-        activation_checkpoint=ActivationCheckpointConfig(
-            mode="selective",
-        ),
+        activation_checkpoint=SelectiveAC.Config(),
     )
 
 
 def qwen3_5_9b_text() -> Trainer.Config:
+    model_spec = model_registry("9B_text")
     return Trainer.Config(
-        loss=ChunkedCELoss.Config(),
+        loss=ChunkedLossWrapper.Config(
+            loss_fn=CrossEntropyLoss.Config(
+                global_vocab_size=decoder_vocab_size(model_spec),
+            ),
+        ),
         hf_assets_path="./assets/hf/Qwen3.5-9B-Base",
         metrics=MetricsProcessor.Config(log_freq=1),
-        model_spec=model_registry("9B_text"),
-        dataloader=HuggingFaceTextDataLoader.Config(dataset="c4"),
-        optimizer=OptimizersContainer.Config(lr=3e-4),
+        model_spec=model_spec,
+        dataloader=GrainDataLoader.Config(
+            dataset=ConcatThenSplitPackingConfig(dataset=DATASETS["c4"]),
+        ),
+        optimizer=default_adamw(lr=3e-4),
         lr_scheduler=LRSchedulersContainer.Config(warmup_steps=20),
         training=TrainingConfig(
-            local_batch_size=1,
-            seq_len=4096,
+            num_tokens_per_microbatch_per_dp_rank=4096,
+            max_context_length=4096,
             steps=100,
         ),
         checkpoint=CheckpointManager.Config(
@@ -64,24 +78,29 @@ def qwen3_5_9b_text() -> Trainer.Config:
             last_save_model_only=False,
             export_dtype="float16",
         ),
-        activation_checkpoint=ActivationCheckpointConfig(
-            mode="full",
-        ),
+        activation_checkpoint=FullAC.Config(),
     )
 
 
 def qwen3_5_35b_a3b() -> Trainer.Config:
+    model_spec = model_registry("35B-A3B")
     return Trainer.Config(
-        loss=ChunkedCELoss.Config(),
+        loss=ChunkedLossWrapper.Config(
+            loss_fn=CrossEntropyLoss.Config(
+                global_vocab_size=decoder_vocab_size(model_spec),
+            ),
+        ),
         hf_assets_path="./assets/hf/Qwen3.5-35B-A3B-Base",
         metrics=MetricsProcessor.Config(log_freq=1),
-        model_spec=model_registry("35B-A3B"),
-        dataloader=HuggingFaceTextDataLoader.Config(dataset="c4"),
-        optimizer=OptimizersContainer.Config(lr=3e-4),
+        model_spec=model_spec,
+        dataloader=GrainDataLoader.Config(
+            dataset=ConcatThenSplitPackingConfig(dataset=DATASETS["c4"]),
+        ),
+        optimizer=default_adamw(lr=3e-4),
         lr_scheduler=LRSchedulersContainer.Config(warmup_steps=20),
         training=TrainingConfig(
-            local_batch_size=1,
-            seq_len=4096,
+            num_tokens_per_microbatch_per_dp_rank=4096,
+            max_context_length=4096,
             steps=100,
         ),
         checkpoint=CheckpointManager.Config(
@@ -89,20 +108,25 @@ def qwen3_5_35b_a3b() -> Trainer.Config:
             last_save_model_only=False,
             export_dtype="float16",
         ),
-        activation_checkpoint=ActivationCheckpointConfig(
-            mode="full",
-        ),
+        activation_checkpoint=FullAC.Config(),
     )
 
 
 def qwen3_5_35b_a3b_debugmodel() -> Trainer.Config:
+    model_spec = model_registry("35B-A3B_debugmodel")
     return Trainer.Config(
-        loss=ChunkedCELoss.Config(),
+        loss=ChunkedLossWrapper.Config(
+            loss_fn=CrossEntropyLoss.Config(
+                global_vocab_size=decoder_vocab_size(model_spec),
+            ),
+        ),
         hf_assets_path="./tests/assets/tokenizer",
         metrics=MetricsProcessor.Config(log_freq=1),
-        model_spec=model_registry("35B-A3B_debugmodel"),
-        dataloader=HuggingFaceTextDataLoader.Config(dataset="c4_test"),
-        optimizer=OptimizersContainer.Config(lr=8e-4),
+        model_spec=model_spec,
+        dataloader=GrainDataLoader.Config(
+            dataset=ConcatThenSplitPackingConfig(dataset=DATASETS["c4_test"]),
+        ),
+        optimizer=default_adamw(lr=8e-4),
         lr_scheduler=LRSchedulersContainer.Config(
             warmup_steps=2,
             decay_ratio=0.8,
@@ -110,28 +134,33 @@ def qwen3_5_35b_a3b_debugmodel() -> Trainer.Config:
             min_lr_factor=0.0,
         ),
         training=TrainingConfig(
-            local_batch_size=1,
-            seq_len=128,
+            num_tokens_per_microbatch_per_dp_rank=128,
+            max_context_length=128,
             steps=10,
         ),
         checkpoint=CheckpointManager.Config(
             interval=10,
             last_save_model_only=False,
         ),
-        activation_checkpoint=ActivationCheckpointConfig(
-            mode="selective",
-        ),
+        activation_checkpoint=SelectiveAC.Config(),
     )
 
 
 def qwen3_5_35b_a3b_micro_debugmodel() -> Trainer.Config:
+    model_spec = model_registry("35B-A3B_micro_debugmodel")
     return Trainer.Config(
-        loss=ChunkedCELoss.Config(),
+        loss=ChunkedLossWrapper.Config(
+            loss_fn=CrossEntropyLoss.Config(
+                global_vocab_size=decoder_vocab_size(model_spec),
+            ),
+        ),
         hf_assets_path="./tests/assets/tokenizer",
         metrics=MetricsProcessor.Config(log_freq=1),
-        model_spec=model_registry("35B-A3B_micro_debugmodel"),
-        dataloader=HuggingFaceTextDataLoader.Config(dataset="c4_test"),
-        optimizer=OptimizersContainer.Config(lr=8e-4),
+        model_spec=model_spec,
+        dataloader=GrainDataLoader.Config(
+            dataset=ConcatThenSplitPackingConfig(dataset=DATASETS["c4_test"]),
+        ),
+        optimizer=default_adamw(lr=8e-4),
         lr_scheduler=LRSchedulersContainer.Config(
             warmup_steps=2,
             decay_ratio=0.8,
@@ -139,15 +168,13 @@ def qwen3_5_35b_a3b_micro_debugmodel() -> Trainer.Config:
             min_lr_factor=0.0,
         ),
         training=TrainingConfig(
-            local_batch_size=1,
-            seq_len=64,
+            num_tokens_per_microbatch_per_dp_rank=64,
+            max_context_length=64,
             steps=10,
         ),
         checkpoint=CheckpointManager.Config(
             interval=10,
             last_save_model_only=False,
         ),
-        activation_checkpoint=ActivationCheckpointConfig(
-            mode="selective",
-        ),
+        activation_checkpoint=SelectiveAC.Config(),
     )

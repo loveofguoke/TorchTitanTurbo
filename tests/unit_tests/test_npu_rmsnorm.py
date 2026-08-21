@@ -9,7 +9,7 @@ from torchtitanturbo.models.common.npu_rmsnorm import (
     NpuRMSNorm,
     NpuRMSNormConverter,
 )
-from torchtitan.models.common.rmsnorm import RMSNorm
+from torchtitan.models.common.nn_modules import RMSNorm
 from torchtitan.protocols.model import ModelConfigConverter
 
 
