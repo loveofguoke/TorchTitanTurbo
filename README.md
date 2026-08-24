@@ -119,6 +119,9 @@ model_spec = model_registry(
 
 Patches replace global functions at import time using a unified replacement mechanism:
 
+See [PATCHES.md](PATCHES.md) for the application order, exact TorchTitan target
+objects, historical addition sequence, and maintenance rules.
+
 ### Patch Infrastructure
 
 **Unified Replacement Mechanism** (`tools/patch_utils.py`):
@@ -139,11 +142,14 @@ are properly replaced.
 | `get_peak_flops` | `torchtitan.tools.utils` | - | Ascend device flops |
 | `build_torch_profiler` | `torchtitan.tools.profiler` | `torch_npu.profiler` | NPU profiler |
 | `build_memory_profiler` | `torchtitan.tools.profiler` | - | NPU memory snapshot |
-| `apply_rotary_emb_*` | `torchtitan.models.common.rope` | `npu_rotary_mul` | NPU RoPE |
+| `apply_compile` validation | `torchtitan.distributed.compile` references | TorchTitan compiler backend | Validate Ascend graph-backend restrictions before delegating to TorchTitan |
+| `_reshape_for_broadcast`, `ComplexRoPE.apply_rotary_emb` | `torchtitan.models.common.rope` | `npu_rotary_mul` | Token-first NPU ComplexRoPE |
 | `_get_gradient_divide_factors` | `torch.distributed.fsdp` | - | NPU gradient handling |
 | `update_from_config` | `DeepSeekV3ModelArgs` | - | DeepSeek config |
 | `apply_non_moe_tp` | `qwen3.infra.parallelize` | - | Qwen3 TP |
 | GLM-5 router config factory | `torchtitan.models.glm5` | rank-local `gather` | Preserve TP/SP placements while avoiding the NPU DTensor gather backward shape bug |
+| GLM-5 parameter initializers | `torchtitan.models.glm5` initializer tables/factories | elementwise inverse-CDF initialization | Avoid DTensor scalar collectives and inconsistent HCCL subgroup initialization |
+| Vocab-parallel CE forward/backward | `torchtitan.components.loss._LossParallelCrossEntropy` | `where`, `gather`, `scatter`, functional all-reduce | Avoid the unsupported NPU boolean-index/`aclnnNonzeroV2` path |
 
 ## Training Configurations
 
