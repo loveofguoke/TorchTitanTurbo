@@ -8,6 +8,8 @@ import math
 import warnings
 
 import torch
+import torch.distributed as dist
+import torch.distributed._functional_collectives as funcol
 import torch.nn.functional as F
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor.experimental import local_map
@@ -18,6 +20,136 @@ from torchtitan.tools.logging import logger
 
 
 _ORIGINAL_TRUNC_NORMAL = torch.nn.init.trunc_normal_
+
+
+def _local_vocab_labels(
+    labels: torch.Tensor,
+    *,
+    vocab_start: int,
+    local_vocab_size: int,
+    ignore_index: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Map global labels to one vocab shard without boolean assignment."""
+    safe_labels = torch.where(labels != ignore_index, labels, 0)
+    out_of_range = (safe_labels < vocab_start) | (
+        safe_labels >= vocab_start + local_vocab_size
+    )
+    local_labels = torch.where(
+        out_of_range,
+        torch.zeros_like(safe_labels),
+        safe_labels - vocab_start,
+    )
+    return local_labels, out_of_range
+
+
+def _npu_safe_loss_parallel_forward(
+    ctx,
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    tp_group: dist.ProcessGroup,
+    global_vocab_size: int,
+    reduction: str = "sum",
+) -> torch.Tensor:
+    """Compute vocab-parallel CE without NPU boolean-index assignment."""
+    from torchtitan.components.loss import IGNORE_INDEX
+
+    logits_dtype = logits.dtype
+    logits = logits.float()
+    tp_world_size = dist.get_world_size(tp_group)
+    tp_rank = dist.get_rank(tp_group)
+    chunk_size = (global_vocab_size + tp_world_size - 1) // tp_world_size
+    vocab_start = min(global_vocab_size, chunk_size * tp_rank)
+    vocab_end = min(global_vocab_size, vocab_start + chunk_size)
+    local_vocab_size = max(0, vocab_end - vocab_start)
+    if logits.shape[-1] != local_vocab_size:
+        raise ValueError(
+            "_LossParallelCrossEntropy expected local vocab size "
+            f"{local_vocab_size} for global vocab size {global_vocab_size}, "
+            f"got {logits.shape[-1]}."
+        )
+    if local_vocab_size == 0:
+        raise ValueError(
+            "_LossParallelCrossEntropy does not support empty vocab shards."
+        )
+
+    local_max = torch.amax(logits, dim=-1, keepdim=True)
+    local_max = funcol.all_reduce(
+        local_max, reduceOp=dist.ReduceOp.MAX.name, group=tp_group
+    )
+    shifted = logits - local_max
+    shifted_sumexp = torch.sum(torch.exp(shifted), dim=-1, keepdim=True)
+    shifted_sumexp = funcol.all_reduce(
+        shifted_sumexp, reduceOp=dist.ReduceOp.SUM.name, group=tp_group
+    )
+    log_probs = shifted - torch.log(shifted_sumexp)
+
+    local_labels, out_of_range = _local_vocab_labels(
+        labels,
+        vocab_start=vocab_start,
+        local_vocab_size=local_vocab_size,
+        ignore_index=IGNORE_INDEX,
+    )
+    local_result = torch.gather(log_probs, -1, local_labels.unsqueeze(-1))
+    local_result = torch.where(
+        out_of_range.unsqueeze(-1),
+        torch.zeros_like(local_result),
+        local_result,
+    )
+    local_result = funcol.all_reduce(
+        local_result, reduceOp=dist.ReduceOp.SUM.name, group=tp_group
+    )
+
+    result = -local_result.squeeze(-1)
+    result = torch.where(labels != IGNORE_INDEX, result, 0)
+    ctx.save_for_backward(log_probs, labels)
+    ctx.logits_dtype = logits_dtype
+    ctx.vocab_start = vocab_start
+    ctx.local_vocab_size = local_vocab_size
+    ctx.reduction = reduction
+    if reduction == "none":
+        return result
+    return result.sum()
+
+
+def _npu_safe_loss_parallel_backward(
+    ctx,
+    grad_output: torch.Tensor,
+) -> tuple[torch.Tensor, None, None, None, None]:
+    """Differentiate vocab-parallel CE without NPU advanced assignment."""
+    from torchtitan.components.loss import IGNORE_INDEX
+
+    log_probs, labels = ctx.saved_tensors
+    local_labels, out_of_range = _local_vocab_labels(
+        labels,
+        vocab_start=ctx.vocab_start,
+        local_vocab_size=ctx.local_vocab_size,
+        ignore_index=IGNORE_INDEX,
+    )
+    grad_update = out_of_range.to(log_probs.dtype) - 1.0
+    grad_input = torch.zeros_like(log_probs).scatter_(
+        -1,
+        local_labels.unsqueeze(-1),
+        grad_update.unsqueeze(-1),
+    )
+    if ctx.reduction == "none":
+        grad_output = grad_output.unsqueeze(-1)
+    grad_output = torch.where(
+        (labels != IGNORE_INDEX).unsqueeze(-1), grad_output, 0
+    )
+    grad_logits = (grad_input + torch.exp(log_probs)) * grad_output
+    return grad_logits.to(ctx.logits_dtype), None, None, None, None
+
+
+def _patch_vocab_parallel_loss() -> None:
+    """Avoid aclnnNonzeroV2 in TorchTitan's TP cross-entropy on NPU."""
+    from torchtitan.components import loss as loss_module
+
+    loss_class = loss_module._LossParallelCrossEntropy
+    if getattr(loss_class, "_torchtitanturbo_npu_patched", False):
+        return
+    loss_class.forward = staticmethod(_npu_safe_loss_parallel_forward)
+    loss_class.backward = staticmethod(_npu_safe_loss_parallel_backward)
+    loss_class._torchtitanturbo_npu_patched = True
 
 
 def _npu_safe_trunc_normal_(
@@ -245,6 +377,7 @@ def apply_patch() -> None:
     """Apply NPU-safe initialization and router config replacements."""
     import torchtitan.models.glm5 as glm5_module
 
+    _patch_vocab_parallel_loss()
     _patch_glm5_param_initializers(glm5_module)
     current_factory = glm5_module.make_router_config
     if getattr(current_factory, "_torchtitanturbo_glm5_npu_patched", False):
@@ -255,4 +388,4 @@ def apply_patch() -> None:
 
     make_router_config._torchtitanturbo_glm5_npu_patched = True
     glm5_module.make_router_config = make_router_config
-    logger.info("Patched GLM-5 router gather for NPU")
+    logger.info("Applied GLM-5 NPU compatibility patches")
