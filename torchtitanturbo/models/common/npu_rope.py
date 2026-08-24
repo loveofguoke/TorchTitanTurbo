@@ -29,8 +29,28 @@ def npu_reshape_for_broadcast(
 
     ndim = len(query_shape)
     assert ndim > 1
-    bsz, seqlen = query_shape[:2]
     cache_width = rope_cache.shape[-1]
+
+    # Current TorchTitan uses token-first queries ``[T, N, H]`` and positions
+    # ``[T]``. Gather the real and imaginary components separately because NPU
+    # gather does not support complex64, then restore the broadcast shape used
+    # by ComplexRoPE.
+    if ndim == 3:
+        num_tokens = query_shape[0]
+        if positions is None:
+            return rope_cache[:num_tokens].view(num_tokens, 1, cache_width)
+        positions_T = positions.reshape(-1)
+        if positions_T.numel() != num_tokens:
+            raise ValueError(
+                "token-first RoPE positions must match the query token count"
+            )
+        return torch.complex(
+            rope_cache.real[positions_T],
+            rope_cache.imag[positions_T],
+        ).view(num_tokens, 1, cache_width)
+
+    # Compatibility with pre-token-first queries ``[B, L, N, H]``.
+    bsz, seqlen = query_shape[:2]
     shape = [
         d if i == 1 else cache_width if i == ndim - 1 else 1
         for i, d in enumerate(query_shape)

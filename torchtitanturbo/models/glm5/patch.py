@@ -2,6 +2,8 @@
 
 """NPU compatibility patches for GLM-5 distributed sharding."""
 
+from dataclasses import fields
+
 import spmd_types as spmd
 
 from torchtitan.distributed.parallel_dims import MeshAxisName
@@ -21,7 +23,7 @@ def _replicated_routing_counts() -> SpmdLayout:
 
 
 def _fix_ep_without_sp(moe_cfg) -> None:
-    activation = dense_activation_placement(tp=spmd.I)
+    activation = dense_activation_placement(tp=spmd.I, cp=spmd.S(0))
     routing_counts = _replicated_routing_counts()
     moe_cfg.sharding_config.state_shardings["tokens_per_expert_E"] = routing_counts
 
@@ -36,9 +38,9 @@ def _fix_ep_without_sp(moe_cfg) -> None:
 
     routed_cfg = moe_cfg.routed_experts.sharding_config
     routed_cfg.in_src_shardings = {
-        "x_BLD": activation,
-        "topk_scores_BLK": activation,
-        "topk_expert_ids_BLK": activation,
+        "x_TD": activation,
+        "topk_scores_TK": activation,
+        "topk_expert_ids_TK": activation,
         "num_local_tokens_per_expert_E": routing_counts,
     }
     routed_cfg.in_dst_shardings = dict(routed_cfg.in_src_shardings)
@@ -66,8 +68,10 @@ def apply_patch():
         return
 
     original_set_moe_sharding = glm5_sharding.set_moe_sharding_config
-    original_moe_init = moe_module.MoE.__init__
-    original_routed_parallelize = moe_module.RoutedExperts.parallelize
+    legacy_seq_dim_tp_sharded = any(
+        config_field.name == "seq_dim_tp_sharded"
+        for config_field in fields(moe_module.MoE.Config)
+    )
 
     def set_moe_sharding_config(
         moe_cfg, *, enable_ep, enable_sp, expert_param_layout
@@ -81,20 +85,24 @@ def apply_patch():
         if enable_ep and not enable_sp:
             _fix_ep_without_sp(moe_cfg)
 
-    def moe_init(self, config):
-        original_moe_init(self, config)
-        self.routed_experts.seq_dim_tp_sharded = config.seq_dim_tp_sharded
-
-    def routed_parallelize(self, parallel_dims):
-        original_routed_parallelize(self, parallel_dims)
-        if not getattr(self, "seq_dim_tp_sharded", False):
-            self.token_dispatcher.wire_meshes(
-                ep_mesh=parallel_dims.get_optional_mesh("ep"),
-                tp_mesh=None,
-            )
-
     set_moe_sharding_config._torchtitanturbo_patched = True
     glm5_sharding.set_moe_sharding_config = set_moe_sharding_config
-    moe_module.MoE.__init__ = moe_init
-    moe_module.RoutedExperts.parallelize = routed_parallelize
+    if legacy_seq_dim_tp_sharded:
+        original_moe_init = moe_module.MoE.__init__
+        original_routed_parallelize = moe_module.RoutedExperts.parallelize
+
+        def moe_init(self, config):
+            original_moe_init(self, config)
+            self.routed_experts.seq_dim_tp_sharded = config.seq_dim_tp_sharded
+
+        def routed_parallelize(self, parallel_dims):
+            original_routed_parallelize(self, parallel_dims)
+            if not getattr(self, "seq_dim_tp_sharded", False):
+                self.token_dispatcher.wire_meshes(
+                    ep_mesh=parallel_dims.get_optional_mesh("ep"),
+                    tp_mesh=None,
+                )
+
+        moe_module.MoE.__init__ = moe_init
+        moe_module.RoutedExperts.parallelize = routed_parallelize
     logger.info("Patched GLM-5 EP sharding for NPU")
