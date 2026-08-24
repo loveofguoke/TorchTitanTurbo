@@ -1,8 +1,11 @@
 # Copyright (c) 2026 Huawei Technologies Co., Ltd. All rights reserved.
 
-"""NPU compatibility patch for the GLM-5 MoE router."""
+"""NPU compatibility patches for GLM-5."""
 
 from dataclasses import dataclass, fields
+from functools import partial
+import math
+import warnings
 
 import torch
 import torch.nn.functional as F
@@ -12,6 +15,93 @@ from torch.distributed.tensor.experimental import local_map
 from torchtitan.models.common.linear import Linear
 from torchtitan.models.common.moe import TokenChoiceTopKRouter
 from torchtitan.tools.logging import logger
+
+
+_ORIGINAL_TRUNC_NORMAL = torch.nn.init.trunc_normal_
+
+
+def _npu_safe_trunc_normal_(
+    tensor: torch.Tensor,
+    mean: float = 0.0,
+    std: float = 1.0,
+    a: float = -2.0,
+    b: float = 2.0,
+    generator: torch.Generator | None = None,
+) -> torch.Tensor:
+    """Initialize an NPU DTensor without a distributed scalar reduction.
+
+    PyTorch 2.14 uses rejection sampling in ``trunc_normal_`` and evaluates
+    ``mask.any()`` on every iteration. For a sharded DTensor that scalar
+    result requires redistribution. On an Ascend multi-axis device mesh, the
+    resulting lazy HCCL subgroup initialization can leave ranks entering
+    different communicators. The inverse-CDF construction below samples the
+    same truncated-normal distribution using only elementwise DTensor ops.
+    """
+    if not isinstance(tensor, DTensor):
+        return _ORIGINAL_TRUNC_NORMAL(
+            tensor,
+            mean=mean,
+            std=std,
+            a=a,
+            b=b,
+            generator=generator,
+        )
+    if tensor.is_meta:
+        return tensor
+    if mean < a - 2 * std or mean > b + 2 * std:
+        warnings.warn(
+            "mean is more than 2 std from [a, b] in nn.init.trunc_normal_. "
+            "The distribution of values may be incorrect.",
+            stacklevel=2,
+        )
+
+    def norm_cdf(value: float) -> float:
+        return (1.0 + math.erf(value / math.sqrt(2.0))) / 2.0
+
+    lower = norm_cdf((a - mean) / std)
+    upper = norm_cdf((b - mean) / std)
+    with torch.no_grad():
+        tensor.uniform_(2 * lower - 1, 2 * upper - 1, generator=generator)
+        tensor.erfinv_()
+        tensor.mul_(std * math.sqrt(2.0))
+        tensor.add_(mean)
+        tensor.clamp_(min=a, max=b)
+    return tensor
+
+
+def _replace_trunc_normal_initializers(param_init: dict) -> dict:
+    converted = {}
+    for name, initializer in param_init.items():
+        if (
+            isinstance(initializer, partial)
+            and initializer.func is _ORIGINAL_TRUNC_NORMAL
+        ):
+            converted[name] = partial(
+                _npu_safe_trunc_normal_,
+                *initializer.args,
+                **(initializer.keywords or {}),
+            )
+        else:
+            converted[name] = initializer
+    return converted
+
+
+def _patch_glm5_param_initializers(glm5_module) -> None:
+    glm5_module._LINEAR_INIT = _replace_trunc_normal_initializers(
+        glm5_module._LINEAR_INIT
+    )
+    for name in ("_output_linear_init", "_depth_init", "_depth_experts_init"):
+        current_factory = getattr(glm5_module, name)
+        if getattr(current_factory, "_torchtitanturbo_npu_init_patched", False):
+            continue
+
+        def factory(*args, _factory=current_factory, **kwargs):
+            return _replace_trunc_normal_initializers(
+                _factory(*args, **kwargs)
+            )
+
+        factory._torchtitanturbo_npu_init_patched = True
+        setattr(glm5_module, name, factory)
 
 
 def _local_gather(scores: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
@@ -152,9 +242,10 @@ def _convert_router_config(
 
 
 def apply_patch() -> None:
-    """Use the NPU-safe router only for subsequently built GLM-5 configs."""
+    """Apply NPU-safe initialization and router config replacements."""
     import torchtitan.models.glm5 as glm5_module
 
+    _patch_glm5_param_initializers(glm5_module)
     current_factory = glm5_module.make_router_config
     if getattr(current_factory, "_torchtitanturbo_glm5_npu_patched", False):
         return

@@ -1,11 +1,13 @@
 # Copyright (c) 2026 Huawei Technologies Co., Ltd. All rights reserved.
 
 import unittest
+from functools import partial
 
 import torch
 
 from torchtitanturbo.models.glm5.patch import (
     _gather_router_scores,
+    _npu_safe_trunc_normal_,
     apply_patch,
     NpuGlm5TokenChoiceTopKRouter,
 )
@@ -39,6 +41,15 @@ class TestGlm5RouterPatch(unittest.TestCase):
             moe_layer.moe.router,
             NpuGlm5TokenChoiceTopKRouter.Config,
         )
+        linear_initializer = dense_layer.attention.wq_a.param_init["weight"]
+        self.assertIsInstance(linear_initializer, partial)
+        self.assertIs(linear_initializer.func, _npu_safe_trunc_normal_)
+
+        expert_initializer = (
+            moe_layer.moe.routed_experts.inner_experts.param_init["w1_EFD"]
+        )
+        self.assertIsInstance(expert_initializer, partial)
+        self.assertIs(expert_initializer.func, _npu_safe_trunc_normal_)
 
 
 if __name__ == "__main__":
