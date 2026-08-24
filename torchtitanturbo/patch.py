@@ -29,7 +29,12 @@ def _npu_available() -> bool:
 
 def set_environ_variable():
     """Set NPU-specific environment variables."""
-    os.environ["PYTORCH_NPU_ALLOC_CONF"] = "expandable_segments:True"
+    # torch_npu 2.14 rejects setting both allocator variables. NPU entry points
+    # own the accelerator-specific setting and must discard the generic one.
+    os.environ.pop("PYTORCH_ALLOC_CONF", None)
+    os.environ.setdefault(
+        "PYTORCH_NPU_ALLOC_CONF", "expandable_segments:True"
+    )
     os.environ["TASK_QUEUE_ENABLE"] = "2"
     os.environ["MULTI_STREAM_MEMORY_REUSE"] = "2"
     os.environ["CPU_AFFINITY_CONF"] = "2"
