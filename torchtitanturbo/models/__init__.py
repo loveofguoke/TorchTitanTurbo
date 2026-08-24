@@ -33,6 +33,16 @@ def apply_qwen3_patch():
         pass
 
 
+def apply_glm5_patch():
+    """Apply GLM-5 patches if available."""
+    try:
+        from .glm5 import apply_glm5_patch as apply_patch
+
+        apply_patch()
+    except ImportError:
+        pass
+
+
 __all__ = [
     "NpuGroupedExperts",
     "NpuGroupedExpertsConverter",
@@ -45,4 +55,5 @@ __all__ = [
     "apply_rope_patch",
     "apply_deepseek_patch",
     "apply_qwen3_patch",
+    "apply_glm5_patch",
 ]
