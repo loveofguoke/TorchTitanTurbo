@@ -2,9 +2,9 @@
 
 The authoritative experiment entry and current solved/unresolved issue status
 live in the
-[torchtitan-test graph documentation](https://github.com/loveofguoke/torchtitan-test/blob/master/tests/glm5_2_graph/README.md)
+[torchtitan-test graph documentation](https://github.com/loveofguoke/torchtitan-test/blob/feat/glm5-full-dsa-test/tests/glm5_2_graph/README.md)
 and its
-[NPU debug report](https://github.com/loveofguoke/torchtitan-test/blob/master/tests/glm5_2_graph/NPU_GRAPH_DEBUG_REPORT.md).
+[NPU debug report](https://github.com/loveofguoke/torchtitan-test/blob/feat/glm5-full-dsa-test/tests/glm5_2_graph/NPU_GRAPH_DEBUG_REPORT.md).
 This file documents only the Turbo implementation boundary. It must not be
 used by itself to claim that a backend or topology passed smoke, precision, or
 performance acceptance.

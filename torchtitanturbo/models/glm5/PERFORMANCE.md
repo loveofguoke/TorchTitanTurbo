@@ -4,6 +4,11 @@ TorchTitanTurbo owns Ascend-only operators and compatibility code. Performance
 replacements are opt-in; importing Turbo or applying normal GLM-5 compatibility
 patches must not silently change Full DSA semantics.
 
+Runnable commands, reports, and promotion status are owned by the
+[torchtitan-test Full DSA optimization workflow](https://github.com/loveofguoke/torchtitan-test/blob/feat/glm5-full-dsa-test/tests/glm5_2_performance/OPTIMIZATION.md).
+This document describes only the Ascend implementation and evidence required
+from that workflow.
+
 ## Implemented paths
 
 `ops/triton.py` registers the TorchTitan GLM-specific Triton kernels for NPU.

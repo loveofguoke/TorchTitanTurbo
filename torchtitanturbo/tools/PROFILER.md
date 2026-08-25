@@ -2,9 +2,9 @@
 
 The authoritative user commands, captured measurements, topology reports, and
 optimization conclusions live in the
-[torchtitan-test performance documentation](https://github.com/loveofguoke/torchtitan-test/blob/master/tests/glm5_2_performance/README.md).
+[torchtitan-test performance documentation](https://github.com/loveofguoke/torchtitan-test/blob/feat/glm5-full-dsa-test/tests/glm5_2_performance/README.md).
 The current cross-topology evidence is indexed by the
-[exploration reports](https://github.com/loveofguoke/torchtitan-test/tree/master/tests/glm5_2_performance/explorations/reports).
+[exploration reports](https://github.com/loveofguoke/torchtitan-test/tree/feat/glm5-full-dsa-test/tests/glm5_2_performance/explorations/reports).
 This document describes only TorchTitanTurbo's Ascend implementation boundary.
 
 ## Three-repository data flow
