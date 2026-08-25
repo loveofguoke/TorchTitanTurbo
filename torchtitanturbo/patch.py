@@ -30,7 +30,13 @@ def _npu_available() -> bool:
 def set_environ_variable():
     """Set NPU-specific environment variables."""
     os.environ["PYTORCH_NPU_ALLOC_CONF"] = "expandable_segments:True"
-    os.environ["TASK_QUEUE_ENABLE"] = "2"
+    requested_task_queue = os.environ.get("TORCHTITAN_TASK_QUEUE_ENABLE")
+    if requested_task_queue not in (None, "0", "1", "2"):
+        raise ValueError(
+            "TORCHTITAN_TASK_QUEUE_ENABLE must be 0, 1, or 2; "
+            f"got {requested_task_queue!r}"
+        )
+    os.environ["TASK_QUEUE_ENABLE"] = requested_task_queue or "2"
     os.environ["MULTI_STREAM_MEMORY_REUSE"] = "2"
     os.environ["CPU_AFFINITY_CONF"] = "2"
 
@@ -61,6 +67,7 @@ def apply_all_patches():
 
     from torchtitanturbo.tools import (
         apply_compile_patch,
+        apply_graph_compat_patches,
         apply_profiler_patch,
         apply_utils_patch,
     )
@@ -75,6 +82,7 @@ def apply_all_patches():
     apply_utils_patch()
     apply_profiler_patch()
     apply_compile_patch()
+    apply_graph_compat_patches()
     apply_rope_patch()
     apply_fsdp_patch()
     apply_deepseek_patch()
