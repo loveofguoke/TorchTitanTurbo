@@ -151,6 +151,26 @@ are properly replaced.
 | GLM-5 parameter initializers | `torchtitan.models.glm5` initializer tables/factories | elementwise inverse-CDF initialization | Avoid DTensor scalar collectives and inconsistent HCCL subgroup initialization |
 | Vocab-parallel CE forward/backward | `torchtitan.components.loss._LossParallelCrossEntropy` | `where`, `gather`, `scatter`, functional all-reduce | Avoid the unsupported NPU boolean-index/`aclnnNonzeroV2` path |
 
+### Optional GLM-5 SparseMLA kernel
+
+The full-DSA feature branch also provides an explicit TorchTitan component
+override for `torch_npu.npu_sparse_flash_attention`:
+
+```bash
+./run_train.sh \
+  --override.imports \
+  torchtitanturbo.models.glm5.ops.sparse_mla.npu_sparse_mla
+```
+
+Importing `torchtitanturbo` does not enable this override. Existing eager,
+precision, checkpoint, stability, smoke, graph, performance, and combination
+experiments therefore retain their current path unless the command above is
+added explicitly. The PyTorch GLM-5 indexer remains the correctness reference;
+this override replaces only the absorbed SparseMLA compute boundary.
+
+See [the GLM-5 Full DSA mapping](torchtitanturbo/models/glm5/FULL_DSA.md) for
+the reference/GPU/NPU correspondence and current operator limits.
+
 ## Training Configurations
 
 NPU-optimized training configs for Llama4:
@@ -265,6 +285,10 @@ torchtitanturbo/
 │   │   └── config_registry.py  # NPU Llama4 training configs
 │   ├── deepseek_v3/
 │   │   └── patch.py            # DeepSeek config patch
+│   ├── glm5/
+│   │   ├── patch.py            # Default GLM-5 compatibility patches
+│   │   └── ops/
+│   │       └── sparse_mla.py   # Explicit NPU SparseMLA operator
 │   └── qwen3/
 │       └── patch.py            # Qwen3 TP patch
 ├── examples/
