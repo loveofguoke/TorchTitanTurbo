@@ -12,8 +12,8 @@ their original behavior.
 
 | DSA stage | TorchTitan reference | Ascend implementation |
 |---|---|---|
-| Index projections and exact top-k | `Glm5DsaIndexer` and `DSAIndexerTopK` | PyTorch reference retained |
-| Absorbed sparse attention | `SparseMLA` | `ops/sparse_mla.py::NpuSparseMLA` |
+| Index projections and exact top-k | `Glm5DsaIndexer` and `DSAIndexerTopK` | reference or `ops/triton.py::AscendTritonDSAIndexerTopK` |
+| Absorbed sparse attention | `SparseMLA` | Triton-Ascend implementation or `ops/sparse_mla.py::NpuSparseMLA` |
 | Sparse KV gather | PyTorch advanced indexing | Performed inside `npu_sparse_flash_attention` from supplied indices |
 | Cross-layer index reuse | Decoder tensor carrier | Same model path; no NPU patch |
 | TP/CP/PP/EP semantics | TorchTitan sharding and wrappers | Uses the same outer model contracts |
@@ -33,27 +33,33 @@ Enable it explicitly:
 
 ## GPU, NPU, and reference correspondence
 
-All three paths implement the same `SparseMLA.Config` interface:
+All paths implement the same component interfaces:
 
 - reference: explicit top-k KV gather and PyTorch attention;
-- GPU: local TileLang SparseMLA forward/backward;
-- NPU: `npu_sparse_flash_attention`.
+- GPU: Triton index-score and SparseMLA forward/backward;
+- NPU Triton: the same mathematical kernels compiled by Triton-Ascend;
+- NPU native: `npu_sparse_flash_attention` for SparseMLA.
 
 The model projections, top-k tensor, masks, state dict, and post-attention
 `W_V/W_O` are shared. This boundary permits reference-vs-NPU capture and
 comparison without changing the GLM model definition.
 
-The implementation was checked against the public GLM-5 Slime flow for
-absorbed MLA and index sharing, and against the Ascend DSA operator integration
-used by the NPU DeepSeek implementation. Turbo does not import Slime.
+Turbo imports no external training framework. The TorchTitan component
+contracts remain the only runtime integration boundary.
 
 ## Current NPU limits
 
 - The public fused NPU lightning-indexer geometry does not match GLM-5's
-  index-head layout, so the PyTorch indexer remains active.
+  index-head layout. Use the GLM-specific Triton-Ascend implementation or the
+  PyTorch reference instead of silently adapting that operator.
 - `npu_sparse_flash_attention` requires a compatible CANN/torch_npu release,
   BF16 tensors, and supported production dimensions.
 - Single-card forward/backward must pass before TP, CP, PP, EP, graph mode, or
   combined topology claims are made.
 - Graph and distributed behavior are test obligations, not implied by the
   operator adapter alone.
+
+See [PERFORMANCE.md](PERFORMANCE.md) for the Ascend optimization roadmap,
+integration boundaries, and required profiler evidence.
+See [性能优化实践.md](性能优化实践.md) for the Chinese implementation notes and
+performance interview checklist.
