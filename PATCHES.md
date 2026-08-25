@@ -81,6 +81,9 @@ device-neutral.
 
 Implementation: `torchtitanturbo/tools/profiler.py`
 
+Detailed boundary, option groups, data flow, and links to the authoritative
+experiment reports: `torchtitanturbo/tools/PROFILER.md`
+
 ### Graph compile validation
 
 Turbo wraps TorchTitan's `apply_compile` entry point. It does not implement a
@@ -228,6 +231,19 @@ and functional all-reduce operations. Ignore-index handling, reductions,
 global-vocabulary sharding, and output dtype are preserved.
 
 Implementation: `torchtitanturbo/models/glm5/patch.py`
+
+### Opt-in graph compatibility
+
+Target modules include the torch_npu Triton autotuners, TorchTitan
+`GroupedExperts`, PyTorch DTensor pointwise registration, PipelineStage
+metadata exchange, and the torch_npu graph-tree skip policy. These patches are
+implemented in `torchtitanturbo/tools/graph_compat.py` and are disabled unless
+their documented `TORCHTITAN_*` environment variable is selected. See
+`torchtitanturbo/tools/GRAPH_MODE.md` for the exact switches, limitations and
+ownership boundary.
+
+The experiment repository still owns CANN activation, HCCL ports/timeouts,
+compiler caches and fallback A/B settings. TorchTitan remains device-neutral.
 
 ## Historical addition sequence
 
