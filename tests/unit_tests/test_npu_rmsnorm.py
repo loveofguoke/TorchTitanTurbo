@@ -1,16 +1,18 @@
 # Copyright (c) 2026 Huawei Technologies Co., Ltd. All rights reserved.
 
 import unittest
+from dataclasses import dataclass, field
 from unittest.mock import MagicMock, patch
 
 import torch
 
+from torchtitan.config import Configurable
+from torchtitan.models.common.nn_modules import RMSNorm
+from torchtitan.protocols.model import ModelConfigConverter
 from torchtitanturbo.models.common.npu_rmsnorm import (
     NpuRMSNorm,
     NpuRMSNormConverter,
 )
-from torchtitan.models.common.nn_modules import RMSNorm
-from torchtitan.protocols.model import ModelConfigConverter
 
 
 class TestNpuRMSNorm(unittest.TestCase):
@@ -65,13 +67,16 @@ class TestNpuRMSNormConverter(unittest.TestCase):
 
     def test_convert_replaces_rmsnorm_configs(self):
         """Convert replaces RMSNorm.Config with NpuRMSNorm.Config."""
-        from torchtitan.protocols.model import ModelConfig
+        @dataclass(kw_only=True, slots=True)
+        class ModelConfig(Configurable.Config):
+            layers: list[Configurable.Config] = field(default_factory=list)
 
-        model_config = ModelConfig()
-        model_config.layers = [
-            RMSNorm.Config(normalized_shape=32, eps=1e-5),
-            RMSNorm.Config(normalized_shape=64, eps=1e-6),
-        ]
+        model_config = ModelConfig(
+            layers=[
+                RMSNorm.Config(normalized_shape=32, eps=1e-5),
+                RMSNorm.Config(normalized_shape=64, eps=1e-6),
+            ]
+        )
 
         converter = NpuRMSNormConverter(NpuRMSNormConverter.Config())
         converter.convert(model_config)
