@@ -1,5 +1,8 @@
 # TorchTitanTurbo
 
+Before changing a patch target or repository interface, read
+[`DEPENDENCY_AUDIT.md`](DEPENDENCY_AUDIT.md) and [`PATCHES.md`](PATCHES.md).
+
 NPU-optimized converters and patches for TorchTitan. Provides fused operators for Ascend NPU acceleration.
 
 ## Overview
@@ -17,10 +20,18 @@ TorchTitanTurbo is a **plugin library** for TorchTitan that provides NPU-specifi
 
 ## Installation
 
+Install a vendor-compatible PyTorch/torch_npu/CANN environment first, then
+source-install the matching repositories:
+
 ```bash
-pip install torchtitan
-pip install torchtitanturbo
+python -m pip install -e ../torchtitan
+python -m pip install -e . --no-deps
+python -m pip check
 ```
+
+Arbitrary TorchTitan commits are not API compatible with arbitrary Turbo
+commits. Use the revisions recorded by the consuming experiment and follow the
+checks in `DEPENDENCY_AUDIT.md`.
 
 ## Quick Start
 
@@ -37,47 +48,25 @@ This enables:
 - NPU profiler support
 - NPU peak flops calculation
 - NPU RoPE optimization
-- DeepSeek/Qwen3 model compatibility
 - GLM-5 NPU-safe DTensor router gather
+
+GLM-5 is the compatibility scope reviewed against the adjacent TorchTitan and
+torchtitan-test checkouts. DeepSeek, Qwen, and legacy Llama modules are separate
+maintenance scopes and must not be assumed compatible from this GLM status.
 
 ### Training with NPU Optimizations
 
-**Python API:**
-```python
-import torchtitanturbo
-from torchtitanturbo.models.llama4.config_registry import npu_llama4_debugmodel
-from torchtitan.trainer import Trainer
+The supported GLM launcher lives in the adjacent `torchtitan-test` repository.
+It imports Turbo before TorchTitan constructs the trainer and records the full
+resolved command:
 
-config = npu_llama4_debugmodel()  # NPU-optimized config
-trainer = Trainer(config)         # Use TorchTitan's Trainer
-trainer.train()
-```
-
-**Command Line:**
 ```bash
-python -m torchtitan.train \
-    --module torchtitanturbo.models.llama4 \
-    --config npu_llama4_debugmodel
+cd ../torchtitan-test
+export ASCEND_RT_VISIBLE_DEVICES=4
+NGPU=1 LOG_RANK=0 MODULE=glm5 CONFIG=glm5_debugmodel ./run_train.sh
 
-# Multi-NPU with torchrun
-torchrun --nproc_per_node=4 -m torchtitan.train \
-    --module torchtitanturbo.models.llama4 \
-    --config npu_llama4_debugmodel \
-    --parallelism.tensor_parallel_degree 4
-```
-
-**Example Scripts:**
-```bash
-# Single NPU
-bash examples/train_llama4_multicard.sh single_npu
-
-# Multi-NPU strategies
-bash examples/train_llama4_multicard.sh tp_4npu      # Tensor Parallel
-bash examples/train_llama4_multicard.sh ep_2npu      # Expert Parallel
-bash examples/train_llama4_multicard.sh hybrid_8npu  # TP+EP+FSDP
-
-# Multi-node
-bash examples/train_llama4_multinode.sh master
+python tests/glm5_2_smoke/train_smoke.py \
+  --device npu --topology single --force
 ```
 
 ## Converters (Model-Level)
@@ -306,7 +295,7 @@ Tests verify:
 
 ## Requirements
 
-- Python >= 3.7
+- Python >= 3.11 (matching the current TorchTitan requirement)
 - torch_npu (for NPU hardware)
 - torchtitan >= 0.2.2
 - Ascend NPU hardware (optional, for execution)

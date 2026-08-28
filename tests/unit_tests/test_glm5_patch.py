@@ -5,7 +5,10 @@ from functools import partial
 
 import torch
 
+from torchtitan.models.common.linear import Linear
+from torchtitan.models.common.moe import TokenChoiceTopKRouter
 from torchtitanturbo.models.glm5.patch import (
+    _convert_router_config,
     _gather_router_scores,
     _local_vocab_labels,
     _npu_safe_trunc_normal_,
@@ -15,6 +18,60 @@ from torchtitanturbo.models.glm5.patch import (
 
 
 class TestGlm5RouterPatch(unittest.TestCase):
+    def test_npu_router_preserves_torchtitan_router_contract(self):
+        torch.manual_seed(19)
+        inputs_TD = torch.randn(11, 6)
+        expert_bias_E = torch.linspace(-0.05, 0.05, 8)
+        gate = Linear.Config(in_features=6, out_features=8, bias=False)
+        cases = (
+            (
+                TokenChoiceTopKRouter.Config(
+                    num_experts=8,
+                    gate=gate,
+                    num_expert_groups=4,
+                    num_limited_groups=2,
+                    top_k=2,
+                    score_func="sigmoid",
+                    route_norm=True,
+                    route_scale=2.5,
+                ),
+                expert_bias_E,
+            ),
+            (
+                TokenChoiceTopKRouter.Config(
+                    num_experts=8,
+                    gate=gate,
+                    top_k=2,
+                    score_func="softmax",
+                ),
+                None,
+            ),
+            (
+                TokenChoiceTopKRouter.Config(
+                    num_experts=8,
+                    gate=gate,
+                    top_k=2,
+                    score_func="sigmoid",
+                    route_norm=True,
+                    route_scale=1.25,
+                    _debug_force_load_balance=True,
+                ),
+                expert_bias_E,
+            ),
+        )
+
+        for reference_config, bias in cases:
+            with self.subTest(config=reference_config):
+                reference = reference_config.build()
+                candidate = _convert_router_config(reference_config).build()
+                candidate.load_state_dict(reference.state_dict(), strict=True)
+
+                expected = reference(inputs_TD, bias)
+                actual = candidate(inputs_TD, bias)
+
+                for actual_tensor, expected_tensor in zip(actual, expected):
+                    torch.testing.assert_close(actual_tensor, expected_tensor)
+
     def test_local_vocab_labels_match_boolean_indexing(self):
         labels = torch.tensor([-100, 0, 3, 4, 7, 8, 15])
         actual, actual_out_of_range = _local_vocab_labels(

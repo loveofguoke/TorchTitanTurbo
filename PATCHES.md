@@ -3,11 +3,17 @@
 This document records why each global NPU patch exists, which TorchTitan API it
 targets, and how the patch set evolved. It was reviewed against:
 
-- TorchTitanTurbo `36cbba683519`
-- TorchTitan `215215525a82`
+- TorchTitanTurbo `7343c9b` (`glm-dev`)
+- TorchTitan `33270583` (`feat/glm5-model-distributed`)
 
 TorchTitan changes frequently. These revisions are reference points, not a
 permanent compatibility promise.
+
+The GLM patch group is the reviewed scope for these revisions. The current
+DeepSeek V3 and Qwen3 patch targets still reference older TorchTitan module
+paths and are excluded from the GLM compatibility claim until separately
+updated and tested. Legacy Llama4 examples are likewise historical, not a
+supported entry point for the current TorchTitan checkout.
 
 ## Ownership and activation
 
@@ -193,6 +199,13 @@ metadata for the integer top-k indices.
 This avoids the NPU DTensor gather backward-shape failure while preserving
 GLM's router scoring, top-k selection, normalization, route scaling, and debug
 load-balancing behavior.
+
+Because the upstream router does not expose the score-gather operation as an
+override hook, the NPU subclass must retain a small forward override. The
+Turbo unit suite therefore compares it directly with the current TorchTitan
+router across sigmoid/softmax, expert bias, node-limited routing,
+normalization, and debug load balancing. An upstream behavior change must
+update or remove this override rather than drift silently.
 
 #### DTensor truncated-normal initialization
 

@@ -1,0 +1,47 @@
+# TorchTitanTurbo dependency and regression contract
+
+TorchTitanTurbo is a downstream, NPU-specific extension of source-installed
+TorchTitan. Its patches are coupled to exact TorchTitan symbols even when the
+Python package dependency has no version bound.
+
+## Repository relationship
+
+- Upstream model and trainer contracts: `../torchtitan`.
+- NPU patches and optimized replacements: this repository.
+- Launch, numerical, graph, performance, and lifecycle validation:
+  `../torchtitan-test`.
+
+For GLM-5, also read
+`../torchtitan/torchtitan/models/glm5/DEPENDENCY_AUDIT.md` and
+`../torchtitan-test/DEPENDENCY_AUDIT.md`.
+
+## Patch dependency map
+
+| Turbo surface | Upstream dependency | Downstream validation |
+|---|---|---|
+| `models/glm5/patch.py` router | `models/common/moe.py::TokenChoiceTopKRouter`, GLM router config factory | Turbo router contract test, EP smoke/parity/precision |
+| GLM parameter initialization patch | GLM config factories and parameter-init dictionaries | GLM patch unit test, multi-axis TP/EP smoke |
+| NPU vocab-parallel loss | `components.loss._LossParallelCrossEntropy` | TP smoke, TP precision and backward comparison |
+| `graph_compat.py` and compile patches | TorchTitan model/parallel call graph plus torch_npu private APIs | graph debug, graph smoke, eager-vs-graph precision/performance |
+| profiler integration | Trainer profiler hooks and torch_npu profiler API | performance probe and offline analysis |
+| import-time patch bootstrap | all patch modules above | patch status/idempotency tests and one NPU import smoke test |
+
+## Mandatory audit after changes
+
+1. Resolve every patched/imported upstream symbol against the installed
+   TorchTitan checkout. Do not interpret an API-break `ImportError` as “model
+   unavailable.”
+2. When copying or overriding a forward method, compare it with the current
+   upstream implementation and maintain a behavioral equivalence test for all
+   unchanged semantics.
+3. Keep NPU-specific code here; never edit TorchTitan trainer/framework code to
+   make a Turbo workaround pass.
+4. Keep every patch optional, idempotent, observable, and default-off when it
+   changes graph or numerical behavior.
+5. Audit torchtitan-test smoke, parity, precision, graph, performance,
+   checkpoint, stability, and combination call sites affected by the patch.
+6. Update `PATCHES.md`, this document, and downstream experiment documentation
+   whenever a patch target, fallback, or requirement changes.
+
+Other model forks are independent review scopes. A GLM change must not
+opportunistically rewrite Qwen, DeepSeek, or Llama patches.
