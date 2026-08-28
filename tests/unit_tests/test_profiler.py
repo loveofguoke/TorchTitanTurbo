@@ -61,7 +61,7 @@ class TestNpuProfilerOptions(unittest.TestCase):
             "TORCHTITAN_NPU_PROFILER_AIC_METRICS": "pipe_utilization",
         }
         with patch.dict(os.environ, environment, clear=True):
-            with self.assertRaisesRegex(ValueError, "Level0"):
+            with self.assertRaisesRegex(ValueError, "(?i)level0"):
                 NpuProfilerOptions.from_environment()
 
     def test_legacy_online_parse_switch_maps_to_offline(self):

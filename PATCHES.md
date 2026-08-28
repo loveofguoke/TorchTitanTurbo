@@ -1,10 +1,12 @@
 # TorchTitanTurbo patch inventory
 
 This document records why each global NPU patch exists, which TorchTitan API it
-targets, and how the patch set evolved. It was reviewed against:
+targets, and how the patch set evolved. The graph and GLM patch targets were
+most recently resolved against:
 
-- TorchTitanTurbo `7343c9b` (`glm-dev`)
-- TorchTitan `33270583` (`feat/glm5-model-distributed`)
+- TorchTitanTurbo `a5306484` (`glm-dev`) plus the documented graph working tree
+- TorchTitan `59899ade` (`feat/glm5-model-distributed`)
+- torchtitan-test `01f2f3e1` (`master`) plus the documented experiment working tree
 
 TorchTitan changes frequently. These revisions are reference points, not a
 permanent compatibility promise.
@@ -207,6 +209,14 @@ explicit FP32 compute path. Selected scores are gathered through a rank-local
 `local_map` operation while preserving DTensor placements, including placement
 metadata for the integer top-k indices.
 
+The explicit gate dtype is not redundant with TorchTitan's generic router.
+Since TorchTitan `ad17686a`, that router uses `torch.autocast(...,
+dtype=torch.float32)` and the common `Linear` no longer accepts
+`compute_dtype`. CPU autocast disables that unsupported target dtype, while the
+Ascend GLM precision contract still requires FP32 routing. Turbo therefore owns
+and unit-tests the stronger NPU contract: BF16 inputs invoke the gate exactly
+once, compute the linear and bias in FP32, and return FP32 routing scores.
+
 This avoids the NPU DTensor gather backward-shape failure while preserving
 GLM's router scoring, top-k selection, normalization, route scaling, and debug
 load-balancing behavior.
@@ -268,6 +278,14 @@ ownership boundary.
 
 The experiment repository still owns CANN activation, HCCL ports/timeouts,
 compiler caches and fallback A/B settings. TorchTitan remains device-neutral.
+
+The deterministic precision profile additionally opts into a narrowly scoped
+override of `NPUCachingAutotuner._bench_with_launch_args`. Current torch_npu
+does not pass PyTorch's `is_vetted_benchmarking` flag, so even pointwise
+autotuning is rejected when deterministic algorithms are enabled. Turbo marks
+only `HeuristicType.POINTWISE` as vetted; reduction heuristics remain subject
+to the upstream deterministic ban. The override validates the private method
+signature before installation and has behavioral tests for both branches.
 
 ## Historical addition sequence
 

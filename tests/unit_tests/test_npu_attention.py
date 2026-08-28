@@ -1,16 +1,18 @@
 # Copyright (c) 2026 Huawei Technologies Co., Ltd. All rights reserved.
 
 import unittest
+from dataclasses import dataclass, field
 from unittest.mock import MagicMock, patch
 
 import torch
 
+from torchtitan.config import Configurable
+from torchtitan.models.common.attention import ScaledDotProductAttention
+from torchtitan.protocols.model import ModelConfigConverter
 from torchtitanturbo.models.common.npu_attention import (
     NpuScaledDotProductAttention,
     NpuSDPAConverter,
 )
-from torchtitan.models.common.attention import ScaledDotProductAttention
-from torchtitan.protocols.model import ModelConfigConverter
 
 
 class TestNpuScaledDotProductAttention(unittest.TestCase):
@@ -32,22 +34,22 @@ class TestNpuScaledDotProductAttention(unittest.TestCase):
         config = NpuScaledDotProductAttention.Config()
         attention = config.build()
 
-        q = torch.randn(bsz, n_heads, seq_len, head_dim)
-        k = torch.randn(bsz, n_heads, seq_len, head_dim)
-        v = torch.randn(bsz, n_heads, seq_len, head_dim)
+        q = torch.randn(bsz, seq_len, n_heads, head_dim)
+        k = torch.randn(bsz, seq_len, n_heads, head_dim)
+        v = torch.randn(bsz, seq_len, n_heads, head_dim)
 
         out = attention(q, k, v)
 
         mock_npu_fusion_attention.assert_called_once()
         call_args = mock_npu_fusion_attention.call_args
 
-        self.assertEqual(call_args[0][0], q)
-        self.assertEqual(call_args[0][1], k)
-        self.assertEqual(call_args[0][2], v)
+        torch.testing.assert_close(call_args[0][0], q.transpose(1, 2))
+        torch.testing.assert_close(call_args[0][1], k.transpose(1, 2))
+        torch.testing.assert_close(call_args[0][2], v.transpose(1, 2))
         self.assertEqual(call_args[0][3], n_heads)
-        self.assertEqual(call_args[1]["input_layout"], "BNSD")
+        self.assertEqual(call_args[0][4], "BNSD")
 
-        self.assertEqual(out.shape, torch.Size([bsz, n_heads, seq_len, head_dim]))
+        self.assertEqual(out.shape, torch.Size([bsz, seq_len, n_heads, head_dim]))
 
     @patch("torch_npu.npu_fusion_attention")
     def test_forward_with_custom_scale(self, mock_npu_fusion_attention):
@@ -85,10 +87,13 @@ class TestNpuSDPAConverter(unittest.TestCase):
 
     def test_convert_replaces_sdpa_configs(self):
         """Convert replaces ScaledDotProductAttention.Config."""
-        from torchtitan.protocols.model import ModelConfig
+        @dataclass(kw_only=True, slots=True)
+        class ModelConfig(Configurable.Config):
+            attention: Configurable.Config = field(
+                default_factory=ScaledDotProductAttention.Config
+            )
 
         model_config = ModelConfig()
-        model_config.attention = ScaledDotProductAttention.Config()
 
         converter = NpuSDPAConverter(NpuSDPAConverter.Config())
         converter.convert(model_config)

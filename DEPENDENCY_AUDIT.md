@@ -26,6 +26,22 @@ For GLM-5, also read
 | profiler integration | Trainer profiler hooks and torch_npu profiler API, including stack and memory-timeline export contracts | performance probe, flamegraph/memory/all presets, offline analysis, and visualization report |
 | import-time patch bootstrap | all patch modules above | patch status/idempotency tests and one NPU import smoke test |
 
+TorchTitan `ad17686a` removed the repository-local
+`Linear(..., compute_dtype=...)` extension while retaining an autocast-based
+FP32 intent in the generic router. CPU autocast cannot exercise that intent,
+and the Ascend implementation must not depend on it. Consequently the exact
+BF16-input/FP32-gate contract is owned and behaviorally tested here through
+`NpuFp32RouterLinear` and `NpuGlm5TokenChoiceTopKRouter`; downstream CPU parity
+tests validate only TorchTitan's generic module-call contract.
+
+The graph private-symbol audit was last repeated against TorchTitan
+`59899ade`, torch `2.14.0.dev20260805+cpu`, and torch_npu `2.14.0`. It resolved
+`GroupedExperts._grouped_mm`, PipelineStage metadata P2P methods, the DTensor
+pointwise registrar, both NPU Triton autotuner `run` contracts, graph-tree
+`check_for_skip`, and `NPUCachingAutotuner._bench_with_launch_args`. Formal
+deterministic precision exposed the missing vetted pointwise benchmark flag;
+the failure and upstream handoff are recorded as G020 in torchtitan-test.
+
 ## Mandatory audit after changes
 
 1. Resolve every patched/imported upstream symbol against the installed

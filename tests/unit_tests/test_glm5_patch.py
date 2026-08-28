@@ -18,6 +18,40 @@ from torchtitanturbo.models.glm5.patch import (
 
 
 class TestGlm5RouterPatch(unittest.TestCase):
+    def test_npu_router_runs_bfloat16_gate_once_in_float32(self):
+        router = _convert_router_config(
+            TokenChoiceTopKRouter.Config(
+                num_experts=4,
+                gate=Linear.Config(in_features=3, out_features=4, bias=True),
+                top_k=2,
+                score_func="sigmoid",
+            )
+        ).build()
+        router.bfloat16()
+        hidden_states = torch.randn(1, 2, 3, dtype=torch.bfloat16)
+        calls = 0
+
+        def count_gate_calls(*_args):
+            nonlocal calls
+            calls += 1
+
+        hook = router.gate.register_forward_hook(count_gate_calls)
+        try:
+            _, _, scores = router(hidden_states)
+        finally:
+            hook.remove()
+
+        expected_scores = torch.sigmoid(
+            torch.nn.functional.linear(
+                hidden_states.float(),
+                router.gate.weight.float(),
+                router.gate.bias.float(),
+            )
+        )
+        self.assertEqual(calls, 1)
+        self.assertEqual(scores.dtype, torch.float32)
+        torch.testing.assert_close(scores, expected_scores, rtol=0, atol=0)
+
     def test_npu_router_preserves_torchtitan_router_contract(self):
         torch.manual_seed(19)
         inputs_TD = torch.randn(11, 6)

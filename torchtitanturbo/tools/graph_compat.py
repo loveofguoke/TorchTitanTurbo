@@ -9,6 +9,7 @@ behavior.
 
 from __future__ import annotations
 
+import inspect
 import operator
 import os
 from typing import Callable
@@ -26,6 +27,68 @@ def _enabled(name: str) -> bool:
     if value not in (None, "0", "1"):
         raise ValueError(f"{name} must be 0 or 1; got {value!r}")
     return value == "1"
+
+
+def _grouped_mm_weight_grad(
+    B_t: torch.Tensor,
+    expert_ids: torch.Tensor,
+    row_grad_B: torch.Tensor,
+) -> torch.Tensor:
+    grad_B = torch.zeros_like(B_t)
+    grad_B.index_add_(0, expert_ids, row_grad_B)
+    return grad_B
+
+
+def _install_vetted_pointwise_autotune() -> None:
+    import torch_npu._inductor.runtime.triton_heuristics as runtime
+
+    cls = runtime.NPUCachingAutotuner
+    if getattr(
+        cls._bench_with_launch_args,
+        "_torchtitanturbo_vetted_pointwise_autotune",
+        False,
+    ):
+        return
+
+    signature = inspect.signature(cls._bench_with_launch_args)
+    expected_parameters = ("self", "launcher", "launch_args", "reset_args", "kwargs")
+    if tuple(signature.parameters) != expected_parameters:
+        raise RuntimeError(
+            "Unsupported torch_npu NPUCachingAutotuner._bench_with_launch_args "
+            f"signature: {signature}"
+        )
+
+    def bench_with_launch_args(self, launcher, launch_args, reset_args, **kwargs):
+        device_interface = self.get_device_interface()
+        stream = device_interface.get_raw_stream(device_interface.current_device())
+
+        def kernel_call():
+            cloned_args, cloned_kwargs = self.clone_args(*launch_args, **kwargs)
+            self.reset_to_zero_args(*reset_args, **kwargs)
+            launcher(
+                *cloned_args,
+                **cloned_kwargs,
+                stream=stream,
+            )
+
+        if self.inductor_meta.get(
+            "profile_bandwidth_with_do_bench_using_profiling", False
+        ):
+            return runtime.do_bench_using_profiling_npu(kernel_call, rep=1)
+
+        is_vetted_pointwise = (
+            self.heuristic_type == runtime.HeuristicType.POINTWISE
+        )
+        return runtime.benchmarker.benchmark_gpu(
+            kernel_call,
+            rep=1,
+            device_type="npu",
+            is_vetted_benchmarking=is_vetted_pointwise,
+        )
+
+    bench_with_launch_args._torchtitanturbo_vetted_pointwise_autotune = True
+    cls._bench_with_launch_args = bench_with_launch_args
+    logger.info("Enabled vetted NPU pointwise autotuning")
 
 
 def _install_zero_numel_triton_guard() -> None:
@@ -135,9 +198,7 @@ def _install_safe_empty_grouped_mm() -> None:
                 grad_output.unsqueeze(1), row_weights.transpose(-2, -1)
             ).squeeze(1)
             row_grad_B = A.unsqueeze(-1) * grad_output.unsqueeze(-2)
-            grad_B = torch.index_add(
-                torch.zeros_like(B_t), 0, expert_ids, row_grad_B
-            )
+            grad_B = _grouped_mm_weight_grad(B_t, expert_ids, row_grad_B)
             return grad_A, grad_B
 
         @backward_op.register_fake
@@ -269,7 +330,7 @@ def _install_npugraph_skip_policy() -> None:
 
 def _install_npugraph_capture_mode() -> None:
     mode = os.environ.get("TORCHTITAN_NPUGRAPH_CAPTURE_ERROR_MODE")
-    if mode is None:
+    if mode in (None, ""):
         return
     if mode not in ("global", "thread_local", "relaxed"):
         raise ValueError(
@@ -296,6 +357,10 @@ def apply_graph_compat_patches() -> None:
     """Apply only graph compatibility features explicitly requested by env."""
 
     patches: tuple[tuple[str, Callable[[], None]], ...] = (
+        (
+            "TORCHTITAN_VETTED_POINTWISE_AUTOTUNE",
+            _install_vetted_pointwise_autotune,
+        ),
         ("TORCHTITAN_SAFE_ZERO_NUMEL_TRITON", _install_zero_numel_triton_guard),
         ("TORCHTITAN_SAFE_EMPTY_GROUPED_MM", _install_safe_empty_grouped_mm),
         (
