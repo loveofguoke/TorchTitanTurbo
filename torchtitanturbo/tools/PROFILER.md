@@ -53,16 +53,42 @@ TorchTitan public configuration remains device independent.
 | Group | Variables |
 |---|---|
 | Scope and parsing | `RANKS`, `PARSE_MODE`, compatibility alias `ONLINE_PARSE`, `EXPORT_TYPES` |
-| Detail level | `LEVEL`, `AIC_METRICS`, `RECORD_SHAPES`, `WITH_STACK`, `WITH_MODULES`, `RECORD_OP_ARGS` |
-| Memory and cache | `PROFILE_MEMORY`, `L2_CACHE`, `DATA_SIMPLIFICATION`, `GC_DETECT_THRESHOLD` |
+| Detail level | `LEVEL`, `AIC_METRICS`, `RECORD_SHAPES`, `WITH_STACK`, `WITH_MODULES`, `WITH_FLOPS`, `RECORD_OP_ARGS`, `EXPORT_STACKS` |
+| Memory and cache | `PROFILE_MEMORY`, `EXPORT_MEMORY_TIMELINE`, `L2_CACHE`, `DATA_SIMPLIFICATION`, `GC_DETECT_THRESHOLD` |
 | Host and fabric | `HOST_SYSTEM`, `SYSTEM_IO`, `SYSTEM_INTERCONNECTION` |
-| User ranges | `MSTX`, `MSTX_DOMAIN_INCLUDE`, `MSTX_DOMAIN_EXCLUDE` |
+| User ranges | `MSPROF_TX`, `MSTX`, `MSTX_DOMAIN_INCLUDE`, `MSTX_DOMAIN_EXCLUDE` |
 
 The exact defaults and validation sets are defined by
 `NpuProfilerOptions` in `torchtitanturbo/tools/profiler.py`. Experiment presets
 in `torchtitan-test` translate a user-facing goal such as `overview`,
 `distributed`, or `kernel` into these variables. Users should normally select
 a preset instead of setting every variable manually.
+
+`MSPROF_TX` exposes the legacy TX marker collector; `MSTX` exposes the current
+MSTX collector and optional domain filters. Both default to false and are kept
+separate so experiments do not silently change the annotation mechanism.
+
+`EXPORT_STACKS=true` is an opt-in post-processing action for synchronous
+profiles captured with `WITH_STACK=true`. At the trace callback, Turbo asks the
+official `torch_npu.profiler` object to export both
+`self_npu_time_total` and `self_cpu_time_total` folded-stack files. It does not
+vendor a flame graph renderer. `torchtitan-test --preset flamegraph` owns the
+user-facing switch, optional `flamegraph.pl` SVG conversion, artifact links,
+and report text. Timeline visualization remains a MindStudio Insight concern,
+while TensorBoard remains a TorchTitan scalar-metrics concern.
+
+`EXPORT_MEMORY_TIMELINE=true` is another scheduled-callback export. It requires
+`RECORD_SHAPES=true`, `PROFILE_MEMORY=true`, and at least one of
+`WITH_STACK=true` or `WITH_MODULES=true`, matching the official Ascend API
+contract. Turbo writes an interactive HTML, a categorized JSON time series,
+and a raw event JSON stream for the current NPU device. The HTML renderer needs
+`matplotlib`; the test repository owns that optional dependency and links all
+three files from the performance report.
+
+`WITH_FLOPS` is exposed because it exists in the current torch_npu API, but the
+official documentation states that profiler parsing does not currently support
+that field. It must not be confused with TorchTitan's model-formula TFLOPS/MFU
+metrics or used as a parsed acceptance result.
 
 ## Ownership and acceptance
 

@@ -82,8 +82,19 @@ NPU-only collection details are supplied through
 `TORCHTITAN_NPU_PROFILER_*` environment variables. They include rank filters,
 profiler level, AIC metrics, parsing mode, export types, shapes, memory, stack,
 module hierarchy, L2 cache, operator arguments, host-system data, interconnect
-data, and MSTX controls. This keeps TorchTitan's public profiler config
-device-neutral.
+data, legacy msprof TX ranges, and MSTX controls. This keeps TorchTitan's
+public profiler config device-neutral.
+
+When `WITH_STACK=true`, the optional `EXPORT_STACKS=true` control exports
+official CPU/NPU folded-stack files during synchronous trace handling. The test
+repository renders and indexes optional flame graph SVGs; Turbo does not change
+the report format or add a visualization dependency.
+
+The optional `EXPORT_MEMORY_TIMELINE=true` path exports the official interactive
+HTML, categorized JSON series, and raw memory-event stream after a scheduled
+capture. It validates the shape, memory, and stack/module prerequisites before
+training. `WITH_FLOPS` is also forwarded, but remains raw diagnostic data because
+the current official parser does not support that field.
 
 Implementation: `torchtitanturbo/tools/profiler.py`
 

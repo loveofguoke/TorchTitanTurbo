@@ -23,7 +23,7 @@ For GLM-5, also read
 | GLM parameter initialization patch | GLM config factories and parameter-init dictionaries | GLM patch unit test, multi-axis TP/EP smoke |
 | NPU vocab-parallel loss | `components.loss._LossParallelCrossEntropy` | TP smoke, TP precision and backward comparison |
 | `graph_compat.py` and compile patches | TorchTitan model/parallel call graph plus torch_npu private APIs | graph debug, graph smoke, eager-vs-graph precision/performance |
-| profiler integration | Trainer profiler hooks and torch_npu profiler API | performance probe and offline analysis |
+| profiler integration | Trainer profiler hooks and torch_npu profiler API, including stack and memory-timeline export contracts | performance probe, flamegraph/memory/all presets, offline analysis, and visualization report |
 | import-time patch bootstrap | all patch modules above | patch status/idempotency tests and one NPU import smoke test |
 
 ## Mandatory audit after changes

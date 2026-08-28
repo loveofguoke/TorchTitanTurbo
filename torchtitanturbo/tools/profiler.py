@@ -106,6 +106,9 @@ class NpuProfilerOptions:
     profile_memory: bool = True
     with_stack: bool = False
     with_modules: bool = False
+    with_flops: bool = False
+    export_stacks: bool = False
+    export_memory_timeline: bool = False
     parse_mode: str = "sync"
     export_types: tuple[str, ...] = ("text", "db")
     aic_metrics: str = "none"
@@ -114,6 +117,7 @@ class NpuProfilerOptions:
     data_simplification: bool = True
     record_op_args: bool = False
     gc_detect_threshold: float | None = None
+    msprof_tx: bool = False
     mstx: bool = False
     mstx_domain_include: tuple[str, ...] = ()
     mstx_domain_exclude: tuple[str, ...] = ()
@@ -134,6 +138,11 @@ class NpuProfilerOptions:
             profile_memory=_env_bool("PROFILE_MEMORY", True),
             with_stack=_env_bool("WITH_STACK", False),
             with_modules=_env_bool("WITH_MODULES", False),
+            with_flops=_env_bool("WITH_FLOPS", False),
+            export_stacks=_env_bool("EXPORT_STACKS", False),
+            export_memory_timeline=_env_bool(
+                "EXPORT_MEMORY_TIMELINE", False
+            ),
             parse_mode=_env_parse_mode(),
             export_types=_env_choices("EXPORT_TYPES", ("text", "db")),
             aic_metrics=aic_metrics,
@@ -142,6 +151,7 @@ class NpuProfilerOptions:
             data_simplification=_env_bool("DATA_SIMPLIFICATION", True),
             record_op_args=_env_bool("RECORD_OP_ARGS", False),
             gc_detect_threshold=_env_optional_float("GC_DETECT_THRESHOLD"),
+            msprof_tx=_env_bool("MSPROF_TX", False),
             mstx=_env_bool("MSTX", False),
             mstx_domain_include=_env_optional_choices("MSTX_DOMAIN_INCLUDE"),
             mstx_domain_exclude=_env_optional_choices("MSTX_DOMAIN_EXCLUDE"),
@@ -206,6 +216,25 @@ class NpuProfilerOptions:
             self.mstx_domain_include or self.mstx_domain_exclude
         ) and not self.mstx:
             raise ValueError("MSTX domain filters require MSTX collection")
+        if self.export_stacks and not self.with_stack:
+            raise ValueError("NPU stack export requires WITH_STACK=true")
+        if self.export_stacks and self.parse_mode != "sync":
+            raise ValueError("NPU stack export requires synchronous parsing")
+        if self.export_memory_timeline and not self.record_shapes:
+            raise ValueError(
+                "NPU memory timeline export requires RECORD_SHAPES=true"
+            )
+        if self.export_memory_timeline and not self.profile_memory:
+            raise ValueError(
+                "NPU memory timeline export requires PROFILE_MEMORY=true"
+            )
+        if self.export_memory_timeline and not (
+            self.with_stack or self.with_modules
+        ):
+            raise ValueError(
+                "NPU memory timeline export requires WITH_STACK=true or "
+                "WITH_MODULES=true"
+            )
 
     @property
     def online_parse(self) -> bool:
@@ -278,7 +307,7 @@ def _experimental_config(torch_npu: Any, options: NpuProfilerOptions) -> Any:
             torch_npu.profiler.AiCMetrics, options.aic_metrics
         ),
         l2_cache=options.l2_cache,
-        msprof_tx=False,
+        msprof_tx=options.msprof_tx,
         op_attr=options.op_attr,
         data_simplification=options.data_simplification,
         record_op_args=options.record_op_args,
@@ -379,12 +408,40 @@ def build_torch_profiler_npu(self, *, global_step, base_folder, leaf_folder):
         else 0
     )
 
-    on_trace_ready = torch_npu.profiler.tensorboard_trace_handler(
+    official_trace_handler = torch_npu.profiler.tensorboard_trace_handler(
         trace_dir,
         worker_name=f"rank_{rank}",
         analyse_flag=options.online_parse,
         async_mode=options.parse_mode == "async",
     )
+
+    def on_trace_ready(profiler: Any) -> None:
+        official_trace_handler(profiler)
+        step = int(getattr(profiler, "step_num", 0))
+        prefix = f"rank_{rank}_step_{step}"
+        if options.export_stacks:
+            stack_directory = os.path.join(trace_dir, "stacks")
+            os.makedirs(stack_directory, exist_ok=True)
+            profiler.export_stacks(
+                os.path.join(stack_directory, prefix + "_npu_stacks.log"),
+                metric="self_npu_time_total",
+            )
+            profiler.export_stacks(
+                os.path.join(stack_directory, prefix + "_cpu_stacks.log"),
+                metric="self_cpu_time_total",
+            )
+        if options.export_memory_timeline:
+            memory_directory = os.path.join(trace_dir, "memory_timeline")
+            os.makedirs(memory_directory, exist_ok=True)
+            device = f"npu:{torch.npu.current_device()}"
+            for suffix in (".html", ".json.gz", "_raw.json.gz"):
+                profiler.export_memory_timeline(
+                    output_path=os.path.join(
+                        memory_directory,
+                        prefix + "_memory_timeline" + suffix,
+                    ),
+                    device=device,
+                )
 
     logger.info(
         "NPU profiling active: "
@@ -392,7 +449,11 @@ def build_torch_profiler_npu(self, *, global_step, base_folder, leaf_folder):
         f"wait={wait}, warmup={warmup}, active={active}, repeat={repeat}, "
         f"skip_first={skip_first}, record_shapes={options.record_shapes}, "
         f"profile_memory={options.profile_memory}, with_stack={options.with_stack}, "
-        f"with_modules={options.with_modules}, parse_mode={options.parse_mode}, "
+        f"with_modules={options.with_modules}, with_flops={options.with_flops}, "
+        f"parse_mode={options.parse_mode}, "
+        f"msprof_tx={options.msprof_tx}, mstx={options.mstx}, "
+        f"export_stacks={options.export_stacks}, "
+        f"export_memory_timeline={options.export_memory_timeline}, "
         f"output={trace_dir}"
     )
 
@@ -413,6 +474,7 @@ def build_torch_profiler_npu(self, *, global_step, base_folder, leaf_folder):
         record_shapes=options.record_shapes,
         profile_memory=options.profile_memory,
         with_stack=options.with_stack,
+        with_flops=options.with_flops,
         with_modules=options.with_modules,
         experimental_config=_experimental_config(torch_npu, options),
     )
