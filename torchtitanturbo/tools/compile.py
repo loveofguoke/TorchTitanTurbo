@@ -1,6 +1,13 @@
 # Copyright (c) 2026 Huawei Technologies Co., Ltd. All rights reserved.
 
-"""Ascend-specific validation for TorchTitan torch.compile backends."""
+"""Ascend-specific validation for TorchTitan ``torch.compile`` backends.
+
+TorchTitan remains responsible for choosing components and calling
+``torch.compile``. Turbo adds only backend-specific preconditions, then
+delegates to the original entry point. Modules that used ``from ... import
+apply_compile`` hold their own function reference, so patch installation must
+replace those already-imported references as well as the defining module.
+"""
 
 import sys
 from typing import Any

@@ -1,6 +1,13 @@
 # Copyright (c) 2026 Huawei Technologies Co., Ltd. All rights reserved.
 
-"""NPU-optimized ScaledDotProductAttention using torch_npu.npu_fusion_attention."""
+"""Optional NPU fused replacement for common dense SDPA.
+
+This converter targets modules configured as TorchTitan's common
+``ScaledDotProductAttention``. It is not the GLM DSA inner-attention path: DSA
+has an additional top-k mask contract and requires its own sparse/fused kernel.
+Keeping the converter explicit prevents a generic optimization from silently
+changing GLM attention semantics.
+"""
 
 from dataclasses import dataclass
 
@@ -35,13 +42,16 @@ class NpuScaledDotProductAttention(Module):
         is_causal: bool = True,
         **kwargs,
     ) -> torch.Tensor:
-        # Transpose to (bs, heads, seq, dim) for SDPA
+        # TorchTitan uses [B,S,N,H]; npu_fusion_attention's BNSD layout expects
+        # [B,N,S,H]. This is a view transpose rather than a semantic reshaping.
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
         _, n_heads, seq_len, head_dim = q.shape
 
         if scale is None:
             scale = 1.0 / (head_dim**0.5)
 
+        # The fused API uses True for disallowed future positions in sparse
+        # causal mode, unlike additive masks that store a large negative value.
         causal_mask = torch.triu(
             torch.ones((seq_len, seq_len), dtype=torch.bool, device=q.device),
             diagonal=1,

@@ -1,5 +1,14 @@
 # Copyright (c) 2026 Huawei Technologies Co., Ltd. All rights reserved.
 
+"""Optional fused grouped-expert implementation for Ascend.
+
+Routed tokens are already sorted by expert when they reach this module.
+``num_tokens_per_expert`` is converted to cumulative offsets, allowing one
+Grouped GEMM launch to evaluate many variable-size expert matrices. Gate and
+up projections are fused as ``w13``; NPU SwiGLU runs between the two grouped
+matrix multiplications. Token dispatch/combine remains a separate concern.
+"""
+
 import logging
 from dataclasses import dataclass
 
@@ -25,9 +34,12 @@ def _run_experts_grouped_mm(
     num_tokens_per_expert: torch.Tensor,
     swiglu_limit: float | None = None,
 ) -> torch.Tensor:
+    """Run ``x @ w13 -> SwiGLU -> h @ w2`` for all local expert segments."""
     # pyrefly: ignore [missing-attribute]
     offsets = torch.cumsum(num_tokens_per_expert, dim=0, dtype=torch.int32)
 
+    # Rows [offsets[e-1], offsets[e]) multiply expert e's weight. Empty expert
+    # segments are represented by repeated offsets and require backend support.
     h = npu_grouped_mm(x.bfloat16(), w13.bfloat16().transpose(-2, -1), offsets)
     if swiglu_limit is not None:
         gate, up = h.chunk(2, -1)
@@ -70,6 +82,7 @@ class NpuGroupedExperts(Module):
         )
 
     def _experts_forward(self, x, num_tokens_per_expert):
+        """Run local experts and reduce TP row-parallel output when necessary."""
         is_tp = False
         if isinstance(self.w2, DTensor):
             w2 = self.w2.to_local()
@@ -98,6 +111,9 @@ class NpuGroupedExperts(Module):
         return out
 
     def forward(self, x, top_scores, selected_experts_indices):
+        # dispatch: duplicate/sort tokens by selected expert and exchange EP
+        # ownership; combine: reverse the exchange and weighted scatter-add to
+        # original [B,S,D] token order.
         bs, slen, dim = x.shape
         top_k = top_scores.size(-1)
         x = x.view(bs * slen, dim)

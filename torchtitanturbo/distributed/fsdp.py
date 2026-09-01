@@ -1,5 +1,13 @@
 # Copyright (c) 2026 Huawei Technologies Co., Ltd. All rights reserved.
 
+"""Ascend reduction compatibility for PyTorch composable FSDP2.
+
+FSDP2 normally averages gradients through an AVG collective when possible.
+The affected HCCL path requires SUM. Returning pre/post divide factors keeps
+the mathematical result ``sum(grad_r) / data_parallel_size`` unchanged while
+changing only how the backend performs the reduction.
+"""
+
 import torch
 import torch.distributed as dist
 from torch.distributed.distributed_c10d import ReduceOp
@@ -19,7 +27,13 @@ def _get_gradient_divide_factors(
     Union[dist.ReduceOp, dist.ReduceOp.RedOpType],
     Union[dist.ReduceOp, dist.ReduceOp.RedOpType],
 ]:
-    """NPU-patched gradient divide factors."""
+    """Choose SUM reduction and explicit scaling for the NPU backend.
+
+    ``reduce_scatter_group`` covers the FSDP shard axis. An optional
+    ``all_reduce_group`` adds the replicated/HSDP axis, so the averaging factor
+    is the product of both group sizes. Low-range dtypes may divide partly
+    before communication to reduce overflow risk and finish afterward.
+    """
     if device_type == "mtia" or device_type == "npu":
         force_sum_reduction_for_comms = True
 

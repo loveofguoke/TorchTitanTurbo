@@ -5,6 +5,19 @@
 Every patch is gated by a ``TORCHTITAN_*`` environment variable. Importing
 TorchTitanTurbo for ordinary eager training therefore preserves its existing
 behavior.
+
+The patches address different compiler stages and must not be conflated:
+
+* autotuner guards change how generated Triton candidates are benchmarked;
+* safe grouped MM gives Dynamo/AOT a traceable custom-op schema, fake kernel,
+  and backward for empty-expert cases;
+* DTensor strategy registration teaches distributed propagation about complex
+  pointwise values;
+* PP metadata P2P replaces object communication with tensor communication;
+* NPUGraph policies decide which captured FX graphs are eligible for replay.
+
+Each feature is default-off because a graph workaround can affect compilation
+coverage or launch behavior even when its eager mathematics is equivalent.
 """
 
 from __future__ import annotations
@@ -135,6 +148,14 @@ def _install_zero_numel_triton_guard() -> None:
 
 
 def _install_safe_empty_grouped_mm() -> None:
+    """Register a compile-visible grouped MM that tolerates empty experts.
+
+    MoE routing is data dependent: a legal step may send zero tokens to one or
+    more experts. Padding each empty segment to one row gives the backend valid
+    non-empty offsets; positions for real rows are remembered so padding is
+    removed after compute. Fake and autograd registrations let Dynamo/AOT reason
+    about the op without executing device code during tracing.
+    """
     from torchtitan.models.common.moe import GroupedExperts
 
     namespace = "torchtitanturbo_graph"

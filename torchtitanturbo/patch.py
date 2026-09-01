@@ -28,7 +28,13 @@ def _npu_available() -> bool:
 
 
 def set_environ_variable():
-    """Set NPU-specific environment variables."""
+    """Set process-wide NPU runtime policy before any model is constructed.
+
+    These variables affect allocator growth, host enqueueing, stream memory
+    reuse, and CPU affinity. They are runtime policy rather than model math.
+    The task-queue mode has an explicit user override because graph debugging
+    may need synchronous mode while eager throughput normally prefers queues.
+    """
     os.environ["PYTORCH_NPU_ALLOC_CONF"] = "expandable_segments:True"
     requested_task_queue = os.environ.get("TORCHTITAN_TASK_QUEUE_ENABLE")
     if requested_task_queue not in (None, "0", "1", "2"):
@@ -79,6 +85,9 @@ def apply_all_patches():
         apply_qwen3_patch,
     )
 
+    # Patch order follows dependency direction: metrics/profiler/compile and
+    # shared kernels first, distributed compatibility second, then models.
+    # Model patches may rely on the shared RoPE/FSDP behavior already installed.
     apply_utils_patch()
     apply_profiler_patch()
     apply_compile_patch()

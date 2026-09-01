@@ -1,5 +1,13 @@
 # Copyright (c) 2026 Huawei Technologies Co., Ltd. All rights reserved.
 
+"""Optional NPU fused RMSNorm and config-tree converter.
+
+The converter preserves normalized shape, epsilon, and parameter initializer;
+only the module implementation changes. ``npu_rms_norm`` returns auxiliary
+statistics as well, but TorchTitan's RMSNorm contract exposes only normalized
+activations, so the first result is returned.
+"""
+
 from dataclasses import dataclass
 
 import torch

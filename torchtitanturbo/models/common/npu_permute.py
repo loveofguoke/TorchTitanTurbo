@@ -1,5 +1,13 @@
 # Copyright (c) 2026 Huawei Technologies Co., Ltd. All rights reserved.
 
+"""NPU fused local permutation for the common EP token dispatcher.
+
+The surrounding ``AllToAllTokenDispatcher`` still owns expert-count exchange
+and inter-rank AllToAllV. This subclass replaces only the rank-local sorting
+before expert compute and inverse sorting afterward. Backward applies the
+inverse permutation so gradients return to their original token copies.
+"""
+
 from dataclasses import dataclass
 
 import torch
@@ -63,6 +71,9 @@ class NpuTokenDispatcher(AllToAllTokenDispatcher):
     def _permute(
         self, routed_input, num_tokens_per_expert_group, ep_size, num_local_experts
     ):
+        # After EP exchange, expert ids repeat once per source rank. Build the
+        # local expert-id vector from received counts, then sort token rows into
+        # contiguous expert segments required by Grouped GEMM.
         device = routed_input.device
 
         indices = (

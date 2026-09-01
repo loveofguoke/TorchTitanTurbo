@@ -6,6 +6,16 @@ TorchTitan owns the device-neutral profiler schedule and lifecycle. This
 module only translates that contract to ``torch_npu.profiler``. NPU-only
 controls use environment variables so TorchTitan's public config remains
 device independent and the patch can follow multiple TorchTitan revisions.
+
+Data flow:
+
+``test preset -> TORCHTITAN_NPU_PROFILER_* -> NpuProfilerOptions
+-> torch_npu.profiler.profile -> raw CANN/Framework trace
+-> optional synchronous exports -> torchtitan-test offline analysis/report``.
+
+This module collects data; it does not decide whether a training run is fast or
+correct. Profiler-active steps include collection overhead and must be paired
+with repeated profiler-off baselines for performance claims.
 """
 
 from __future__ import annotations
@@ -98,7 +108,13 @@ def _env_ranks() -> tuple[int, ...] | None:
 
 @dataclass(frozen=True)
 class NpuProfilerOptions:
-    """NPU-only profiler controls loaded from environment variables."""
+    """Validated NPU-only controls loaded once for one profiler instance.
+
+    ``level`` and AIC metrics control device-counter depth; shapes/stack/modules
+    enrich operator attribution; host/system collectors widen scope beyond the
+    training process; parse mode controls whether expensive conversion blocks
+    the trace callback or is deferred for offline analysis.
+    """
 
     level: str = "level1"
     ranks: tuple[int, ...] | None = None

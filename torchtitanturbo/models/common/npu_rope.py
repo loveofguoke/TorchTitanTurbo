@@ -1,6 +1,13 @@
 # Copyright (c) 2026 Huawei Technologies Co., Ltd. All rights reserved.
 
-"""Token-first TorchTitan ComplexRoPE support for Ascend NPU."""
+"""Token-first TorchTitan ComplexRoPE support for Ascend NPU.
+
+TorchTitan stores RoPE as a complex cache because complex multiplication is a
+compact reference formula. The affected Ascend gather cannot index complex64,
+so this adapter gathers real/imaginary FP32 components and reconstructs the
+same angles. Rotation then uses ``npu_rotary_mul`` on real token-first tensors.
+DTensor wrappers are restored after the local fused kernel.
+"""
 
 import inspect
 
@@ -74,6 +81,8 @@ def npu_apply_complex_rope(
         rope_cache.to_local() if isinstance(rope_cache, DTensor) else rope_cache
     )
 
+    # Complex cache width is H/2. Interleaved real rotation needs each cosine
+    # and sine duplicated for the adjacent even/odd feature pair.
     cos_1T1H = cache_local.real.repeat_interleave(2, dim=-1).unsqueeze(0)
     sin_1T1H = cache_local.imag.repeat_interleave(2, dim=-1).unsqueeze(0)
     query_1TNH = query_local.float().unsqueeze(0)

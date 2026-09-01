@@ -1,6 +1,19 @@
 # Copyright (c) 2026 Huawei Technologies Co., Ltd. All rights reserved.
 
-"""NPU compatibility patches for GLM-5."""
+"""NPU compatibility patches for the device-neutral GLM-5 model.
+
+The patches fall into three independent groups:
+
+* vocab-parallel cross entropy avoids boolean assignment that lowers to an
+  unsupported NPU nonzero path while preserving TP loss mathematics;
+* DTensor truncated-normal initialization avoids rank-dependent scalar
+  collectives during parameter materialization;
+* the MoE router keeps gate compute in FP32 and gathers selected DTensor scores
+  through a rank-local boundary.
+
+No GLM architecture is copied here. Each patch targets and validates the
+current source-installed TorchTitan implementation.
+"""
 
 from dataclasses import dataclass, fields
 from functools import partial
@@ -50,7 +63,13 @@ def _npu_safe_loss_parallel_forward(
     global_vocab_size: int,
     reduction: str = "sum",
 ) -> torch.Tensor:
-    """Compute vocab-parallel CE without NPU boolean-index assignment."""
+    """Compute vocab-parallel CE without NPU boolean-index assignment.
+
+    For TP rank ``r``, logits contain only vocabulary interval
+    ``[vocab_start, vocab_end)``. A global MAX and SUM implement stable global
+    log-softmax. Only the rank owning each label gathers a nonzero log
+    probability; the final SUM broadcasts that value to every TP rank.
+    """
     from torchtitan.components.loss import IGNORE_INDEX
 
     logits_dtype = logits.dtype
@@ -72,6 +91,8 @@ def _npu_safe_loss_parallel_forward(
             "_LossParallelCrossEntropy does not support empty vocab shards."
         )
 
+    # Global logsumexp over a sharded vocabulary: first agree on the maximum,
+    # then sum exp(logit - max) from every vocabulary shard.
     local_max = torch.amax(logits, dim=-1, keepdim=True)
     local_max = funcol.all_reduce(
         local_max, reduceOp=dist.ReduceOp.MAX.name, group=tp_group
@@ -89,6 +110,8 @@ def _npu_safe_loss_parallel_forward(
         local_vocab_size=local_vocab_size,
         ignore_index=IGNORE_INDEX,
     )
+    # Non-owner ranks gather safe index zero and mask the result. Summing over
+    # TP therefore leaves exactly the owning rank's target log-probability.
     local_result = torch.gather(log_probs, -1, local_labels.unsqueeze(-1))
     local_result = torch.where(
         out_of_range.unsqueeze(-1),
@@ -115,7 +138,12 @@ def _npu_safe_loss_parallel_backward(
     ctx,
     grad_output: torch.Tensor,
 ) -> tuple[torch.Tensor, None, None, None, None]:
-    """Differentiate vocab-parallel CE without NPU advanced assignment."""
+    """Differentiate vocab-parallel CE as ``softmax - one_hot(label)``.
+
+    ``grad_update`` is -1 only on the vocabulary shard that owns the label and
+    0 elsewhere. ``scatter_`` expresses the same update without boolean-index
+    assignment, and ignored labels zero the complete local gradient row.
+    """
     from torchtitan.components.loss import IGNORE_INDEX
 
     log_probs, labels = ctx.saved_tensors
@@ -202,6 +230,7 @@ def _npu_safe_trunc_normal_(
 
 
 def _replace_trunc_normal_initializers(param_init: dict) -> dict:
+    """Replace only exact TorchTitan trunc-normal partials, preserving others."""
     converted = {}
     for name, initializer in param_init.items():
         if (
@@ -244,7 +273,13 @@ def _gather_router_scores(
     scores_TE: torch.Tensor,
     topk_expert_ids_TK: torch.Tensor,
 ) -> torch.Tensor:
-    """Run gather on rank-local shards while preserving DTensor metadata."""
+    """Run gather on rank-local shards while preserving DTensor metadata.
+
+    Router scores and integer expert ids have matching token placements. The
+    expert dimension is local/replicated for this operation, so no collective
+    is required; ``local_map`` merely unwraps local tensors and reattaches the
+    declared placement to the selected ``[T,K]`` scores.
+    """
     if not isinstance(scores_TE, DTensor):
         return _local_gather(scores_TE, topk_expert_ids_TK)
 
@@ -288,7 +323,13 @@ class NpuFp32RouterLinear(Linear):
 
 
 class NpuGlm5TokenChoiceTopKRouter(TokenChoiceTopKRouter):
-    """GLM-5 router with a local DTensor gather boundary for NPU."""
+    """GLM-5 router with FP32 scoring and a local DTensor gather boundary.
+
+    The gate produces ``scores_TE`` for T local tokens and E experts. Optional
+    node/group limiting changes only the selection scores. The returned
+    weights are always gathered from the original scores, normalized over the
+    selected K experts, and multiplied by ``route_scale`` before token dispatch.
+    """
 
     @dataclass(kw_only=True, slots=True)
     class Config(TokenChoiceTopKRouter.Config):
@@ -325,6 +366,8 @@ class NpuGlm5TokenChoiceTopKRouter(TokenChoiceTopKRouter):
         else:
             raise NotImplementedError(f"Unknown score function {self.score_func}")
 
+        # Expert bias and group limiting influence which experts win, but not
+        # the probability/weight later assigned to a selected expert.
         scores_for_choice_TE = (
             scores_TE if expert_bias_E is None else scores_TE + expert_bias_E
         )
@@ -374,7 +417,7 @@ def _convert_router_config(
 
 
 def apply_patch() -> None:
-    """Apply NPU-safe initialization and router config replacements."""
+    """Install all GLM NPU contracts once, leaving GPU/CPU imports untouched."""
     import torchtitan.models.glm5 as glm5_module
 
     _patch_vocab_parallel_loss()

@@ -5,6 +5,13 @@
 Handles 'from X import Y' local references by finding and replacing
 all imported function references across sys.modules.
 
+Python ``from package.module import func`` copies the function object into the
+consumer module namespace. Reassigning only ``package.module.func`` therefore
+does not affect those consumers. ``replace_functions`` scans already-imported
+TorchTitan modules and replaces matching attributes by name; callers must first
+validate the upstream signature and behavior to avoid patching an unrelated
+symbol with the same name.
+
 """
 
 import sys
