@@ -49,6 +49,31 @@ def _fix_ep_without_sp(moe_cfg) -> None:
     )
 
 
+def _fix_tp_only_routed_expert_grad_layout(moe_cfg) -> None:
+    """Mark TP-local RoutedExperts input gradients as Partial on TP.
+
+    Routed expert weights are tensor-parallel sharded while router inputs and
+    scores are replicated. Each TP rank therefore produces only a partial
+    contribution to their gradients; local_map must retain that placement so
+    the replicated router gate receives the TP sum during backward.
+    """
+
+    routed_cfg = moe_cfg.routed_experts.sharding_config
+    routed_inputs = routed_cfg.in_dst_shardings or routed_cfg.in_src_shardings
+    if routed_inputs is None or "x_BLD" not in routed_inputs:
+        return
+    routing_counts = routed_inputs["num_local_tokens_per_expert_E"]
+    partial_activation = dense_activation_placement(tp=spmd.P)
+    routed_cfg.local_map = LocalMapConfig(
+        in_grad_placements=(
+            partial_activation,
+            partial_activation,
+            partial_activation,
+            routing_counts,
+        )
+    )
+
+
 def apply_patch():
     """Patch GLM-5 EP layouts for the supported no-SP configuration."""
     import torchtitan.models.common.moe as moe_module
@@ -84,6 +109,8 @@ def apply_patch():
         )
         if enable_ep and not enable_sp:
             _fix_ep_without_sp(moe_cfg)
+        elif not enable_ep:
+            _fix_tp_only_routed_expert_grad_layout(moe_cfg)
 
     set_moe_sharding_config._torchtitanturbo_patched = True
     glm5_sharding.set_moe_sharding_config = set_moe_sharding_config
