@@ -191,6 +191,11 @@ Implementation: `torchtitanturbo/models/qwen3/patch.py`
 
 ### GLM-5 compatibility patch group
 
+For the FlexAttention DSA test branch, see
+[DSA compatibility audit](torchtitanturbo/models/glm5/DSA.md).
+No new runtime patch is installed for DSA; the added tests check that existing
+patches preserve sparse selection and shared-index configuration.
+
 The GLM patch is deliberately attached to TorchTitan's existing GLM model. It
 does not copy the model into Turbo and does not change the device-neutral GLM
 math stored in TorchTitan.

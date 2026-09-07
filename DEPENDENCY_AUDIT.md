@@ -44,6 +44,10 @@ the failure and upstream handoff are recorded as G020 in torchtitan-test.
 
 ## Mandatory audit after changes
 
+GLM DSA test-branch audit against TorchTitan `8ac999e8`: sparse attention and
+index sharing remain upstream-owned. See `torchtitanturbo/models/glm5/DSA.md`
+and `tests/unit_tests/test_glm5_dsa_contract.py`. NPU execution is not yet verified.
+
 1. Resolve every patched/imported upstream symbol against the installed
    TorchTitan checkout. Do not interpret an API-break `ImportError` as “model
    unavailable.”
