@@ -3,6 +3,7 @@
 """NPU compatibility patches for GLM-5 distributed sharding."""
 
 from dataclasses import fields
+from inspect import signature
 
 import spmd_types as spmd
 
@@ -63,7 +64,11 @@ def _fix_tp_only_routed_expert_grad_layout(moe_cfg) -> None:
     if routed_inputs is None or "x_BLD" not in routed_inputs:
         return
     routing_counts = routed_inputs["num_local_tokens_per_expert_E"]
-    partial_activation = dense_activation_placement(tp=spmd.P)
+    placement_kwargs = {"tp": spmd.P}
+    if "cp" in signature(dense_activation_placement).parameters:
+        activation_types = routed_inputs["x_BLD"].per_axis_spmd_types()
+        placement_kwargs["cp"] = activation_types.get(MeshAxisName.CP, spmd.R)
+    partial_activation = dense_activation_placement(**placement_kwargs)
     routed_cfg.local_map = LocalMapConfig(
         in_grad_placements=(
             partial_activation,
@@ -78,12 +83,27 @@ def apply_patch():
     """Patch GLM-5 EP layouts for the supported no-SP configuration."""
     import torchtitan.models.common.moe as moe_module
     import torchtitan.models.glm5.sharding as glm5_sharding
+    import torchtitan.models.glm5 as glm5_module
 
+    from torchtitanturbo.models.common import NpuRMSNorm
     from .npu_scatter_add import apply_patch as apply_npu_scatter_add_patch
     from .npu_router import apply_patch as apply_npu_router_patch
 
+    # GLM-5 builds its config lazily, so replacing the module-global RMSNorm
+    # here makes only subsequently built GLM-5 models use the NPU-safe module.
+    glm5_module.RMSNorm = NpuRMSNorm
     apply_npu_scatter_add_patch()
     apply_npu_router_patch()
+
+    # Older TorchTitan GLM-5 revisions build the MoE layouts inline and do not
+    # expose this helper. The remaining NPU patches above still apply to those
+    # revisions; there is no sharding helper to wrap.
+    if not hasattr(glm5_sharding, "set_moe_sharding_config"):
+        logger.info(
+            "TorchTitan GLM-5 has no set_moe_sharding_config; "
+            "skipping the optional EP layout wrapper"
+        )
+        return
 
     if getattr(
         glm5_sharding.set_moe_sharding_config,
@@ -107,7 +127,11 @@ def apply_patch():
             enable_sp=enable_sp,
             expert_param_layout=expert_param_layout,
         )
-        if enable_ep and not enable_sp:
+        # The no-SP rewrite targets the legacy flattened RoutedExperts
+        # interface. Current TorchTitan uses x_BLD plus an explicit
+        # DP/TP partition spec; replacing that layout corrupts routing.
+        routed_inputs = moe_cfg.routed_experts.sharding_config.in_src_shardings
+        if enable_ep and not enable_sp and "x_TD" in routed_inputs:
             _fix_ep_without_sp(moe_cfg)
         elif not enable_ep:
             _fix_tp_only_routed_expert_grad_layout(moe_cfg)

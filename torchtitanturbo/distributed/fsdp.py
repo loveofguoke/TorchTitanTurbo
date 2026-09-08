@@ -6,6 +6,61 @@ from torch.distributed.distributed_c10d import ReduceOp
 from typing import Optional, Union
 
 
+def _cast_mixed_gradients_for_reduce(
+    gradients: list[torch.Tensor],
+    reduce_dtype: torch.dtype | None,
+) -> list[torch.Tensor]:
+    """Normalize mixed FSDP gradients for older foreach-reduce runtimes."""
+    if reduce_dtype is None or len({gradient.dtype for gradient in gradients}) <= 1:
+        return gradients
+    return [gradient.to(dtype=reduce_dtype) for gradient in gradients]
+
+
+def _patch_foreach_reduce_mixed_gradients() -> None:
+    from torch.distributed.fsdp._fully_shard import (
+        _fsdp_collectives,
+        _fsdp_param_group,
+    )
+
+    current = _fsdp_collectives.foreach_reduce
+    if getattr(current, "_torchtitanturbo_mixed_gradients_patched", False):
+        return
+
+    def foreach_reduce(*args, **kwargs):
+        positional = list(args)
+        gradients = positional[1]
+        reduce_dtype = positional[6]
+        positional[1] = _cast_mixed_gradients_for_reduce(
+            gradients,
+            reduce_dtype,
+        )
+        return current(*positional, **kwargs)
+
+    foreach_reduce._torchtitanturbo_mixed_gradients_patched = True
+    _fsdp_collectives.foreach_reduce = foreach_reduce
+    # _fsdp_param_group imports the function directly, so patch its binding too.
+    _fsdp_param_group.foreach_reduce = foreach_reduce
+
+
+def _patch_distributed_set_timeout() -> None:
+    """Backport torch.distributed.set_timeout via ProcessGroup.set_timeout."""
+    if hasattr(dist, "set_timeout"):
+        return
+
+    def set_timeout(timeout, group=None):
+        if group is None:
+            group = dist.distributed_c10d._get_default_group()
+        try:
+            group.set_timeout(timeout)
+        except RuntimeError as error:
+            # Degree-one mesh dimensions use PyTorch's fake backend and have
+            # no communication to time out.
+            if "Backend fake does not support setting timeout" not in str(error):
+                raise
+
+    dist.set_timeout = set_timeout
+
+
 def _get_gradient_divide_factors(
     reduce_scatter_group: dist.ProcessGroup,
     all_reduce_group: Optional[dist.ProcessGroup],
@@ -56,6 +111,8 @@ def apply_patch():
     import torch.distributed.fsdp._fully_shard._fsdp_collectives
 
     torch.distributed.fsdp._fully_shard._fsdp_collectives._get_gradient_divide_factors = _get_gradient_divide_factors
+    _patch_foreach_reduce_mixed_gradients()
+    _patch_distributed_set_timeout()
     from torchtitan.tools.logging import logger
 
     logger.info("Patched _get_gradient_divide_factors for NPU")
