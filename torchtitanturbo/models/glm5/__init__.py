@@ -4,8 +4,10 @@ def apply_glm5_patch():
     """Load and apply GLM-5 patches after this package is initialized."""
     import torchtitan.models.glm5.sharding  # noqa: F401
 
+    from .final_norm_fsdp import apply_patch as apply_final_norm_fsdp_patch
     from .patch import apply_patch
 
+    apply_final_norm_fsdp_patch()
     apply_patch()
 
 __all__ = ["apply_glm5_patch"]
