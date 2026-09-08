@@ -65,6 +65,7 @@ def apply_all_patches():
     set_environ_variable()
 
     from torchtitanturbo.compiler import apply_inductor_patch
+    from torchtitanturbo.non_npu_compat import apply_all_non_npu_patches
     from torchtitanturbo.tools import apply_utils_patch, apply_profiler_patch
     from torchtitanturbo.distributed import apply_fsdp_patch
     from torchtitanturbo.models.common import apply_rope_patch
@@ -74,6 +75,7 @@ def apply_all_patches():
         apply_qwen3_patch,
     )
 
+    apply_all_non_npu_patches()
     apply_inductor_patch()
     apply_utils_patch()
     apply_profiler_patch()
