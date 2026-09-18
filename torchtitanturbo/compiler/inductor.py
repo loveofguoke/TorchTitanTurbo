@@ -4,9 +4,41 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 from torchtitan.tools.logging import logger
+
+
+_COMPLEX_DTENSOR_STRATEGY_REGISTERED = False
+
+
+def _env_flag_enabled(name: str) -> bool:
+    value = os.environ.get(name)
+    if value not in (None, "0", "1"):
+        raise ValueError(f"{name} must be 0 or 1; got {value!r}")
+    return value == "1"
+
+
+def _register_complex_dtensor_strategy() -> bool:
+    """Register the missing PyTorch 2.14 strategy for ``aten.complex``."""
+    global _COMPLEX_DTENSOR_STRATEGY_REGISTERED
+    if _COMPLEX_DTENSOR_STRATEGY_REGISTERED:
+        return False
+
+    from torch.distributed.tensor._ops._pointwise_ops import (
+        _register_single_dim_pointwise,
+    )
+
+    try:
+        _register_single_dim_pointwise(torch.ops.aten.complex.default)
+    except (AssertionError, RuntimeError) as error:
+        # Newer PyTorch releases may already carry the upstream registration.
+        if "already" not in str(error).lower():
+            raise
+    _COMPLEX_DTENSOR_STRATEGY_REGISTERED = True
+    return True
 
 
 def _patch_bf16_narrowing_codegen() -> bool:
@@ -86,8 +118,13 @@ def _patch_low_precision_addmm_fusion() -> int:
 
 def apply_patch() -> None:
     """Install idempotent precision guards for the default NPU backend."""
+    complex_strategy_registered = False
+    if _env_flag_enabled("TORCHTITAN_REGISTER_COMPLEX_DTENSOR_STRATEGY"):
+        complex_strategy_registered = _register_complex_dtensor_strategy()
     narrowing_patched = _patch_bf16_narrowing_codegen()
     addmm_patterns = _patch_low_precision_addmm_fusion()
+    if complex_strategy_registered:
+        logger.info("Registered aten.complex DTensor pointwise strategy")
     if narrowing_patched or addmm_patterns:
         logger.info(
             "Patched NPU Inductor BF16 rounding and %d addmm fusion patterns",
