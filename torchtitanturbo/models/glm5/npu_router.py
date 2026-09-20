@@ -3,6 +3,7 @@
 """NPU-safe GLM-5 MoE routing with an explicit FP32 gate."""
 
 from dataclasses import dataclass, fields
+from inspect import Parameter, signature
 
 import torch
 import torch.nn.functional as F
@@ -289,6 +290,35 @@ def _npu_moe_forward(self, x_BLD: torch.Tensor) -> torch.Tensor:
     return out_BLD
 
 
+def _npu_moe_forward_td(self, x_TD: torch.Tensor) -> torch.Tensor:
+    """Token-first wrapper whose name matches current TorchTitan sharding keys."""
+    return _npu_moe_forward(self, x_TD)
+
+
+def _npu_moe_forward_bld(self, x_BLD: torch.Tensor) -> torch.Tensor:
+    """Batched wrapper whose name matches legacy TorchTitan sharding keys."""
+    return _npu_moe_forward(self, x_BLD)
+
+
+def _matching_moe_forward(original_forward):
+    """Select a wrapper that preserves TorchTitan's name-based SPMD contract."""
+    input_names = [
+        parameter.name
+        for parameter in signature(original_forward).parameters.values()
+        if parameter.name != "self"
+        and parameter.kind
+        in (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    if input_names == ["x_TD"]:
+        return _npu_moe_forward_td
+    if input_names == ["x_BLD"]:
+        return _npu_moe_forward_bld
+    raise RuntimeError(
+        "Unsupported TorchTitan MoE.forward signature for the NPU router patch: "
+        f"{signature(original_forward)}"
+    )
+
+
 def _convert_router_config(
     config: TokenChoiceTopKRouter.Config,
 ) -> NpuGlm5TokenChoiceTopKRouter.Config:
@@ -321,6 +351,7 @@ def apply_patch() -> None:
     make_router_config._torchtitanturbo_glm5_router_patched = True
     glm5_module.make_router_config = make_router_config
     if not getattr(moe_module.MoE.forward, "_torchtitanturbo_npu_patched", False):
-        _npu_moe_forward._torchtitanturbo_npu_patched = True
-        moe_module.MoE.forward = _npu_moe_forward
+        patched_moe_forward = _matching_moe_forward(moe_module.MoE.forward)
+        patched_moe_forward._torchtitanturbo_npu_patched = True
+        moe_module.MoE.forward = patched_moe_forward
     logger.info("Patched GLM-5 router FP32 gate and NPU gather")
