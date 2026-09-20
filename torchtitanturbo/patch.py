@@ -35,7 +35,34 @@ def set_environ_variable():
     os.environ.setdefault(
         "PYTORCH_NPU_ALLOC_CONF", "expandable_segments:True"
     )
-    os.environ["TASK_QUEUE_ENABLE"] = "2"
+    requested_task_queue = os.environ.get("TORCHTITAN_TASK_QUEUE_ENABLE")
+    if requested_task_queue not in (None, "0", "1", "2"):
+        raise ValueError(
+            "TORCHTITAN_TASK_QUEUE_ENABLE must be 0, 1, or 2; "
+            f"got {requested_task_queue!r}"
+        )
+    os.environ["TASK_QUEUE_ENABLE"] = requested_task_queue or "2"
+    requested_dkdv_tasklist = os.environ.get(
+        "TORCHTITAN_FLEX_ATTENTION_BWD_DKDV_TASKLIST"
+    )
+    if requested_dkdv_tasklist not in (None, "0", "1"):
+        raise ValueError(
+            "TORCHTITAN_FLEX_ATTENTION_BWD_DKDV_TASKLIST must be 0 or 1; "
+            f"got {requested_dkdv_tasklist!r}"
+        )
+    dkdv_tasklist_env = (
+        "TORCHINDUCTOR_ASCEND_FLEX_ATTENTION_BWD_DKDV_TASKLIST"
+    )
+    if requested_dkdv_tasklist is None:
+        # The current torch_npu task-list path synchronously copies sparse-mask
+        # metadata to the host from the middle of a compiled backward graph.
+        # That host synchronization can deadlock interleaved FSDP/TP process
+        # groups (reproduced by FSDP4 x TP2).  Keep the legacy device-only
+        # dK/dV path as the compatibility default until torch_npu removes the
+        # runtime host read.  Respect a vendor-level override for experiments.
+        os.environ.setdefault(dkdv_tasklist_env, "0")
+    else:
+        os.environ[dkdv_tasklist_env] = requested_dkdv_tasklist
     os.environ["MULTI_STREAM_MEMORY_REUSE"] = "2"
     os.environ["CPU_AFFINITY_CONF"] = "2"
 
@@ -44,6 +71,10 @@ def set_environ_variable():
         f"  PYTORCH_NPU_ALLOC_CONF = {os.environ.get('PYTORCH_NPU_ALLOC_CONF')}"
     )
     logger.info(f"  TASK_QUEUE_ENABLE = {os.environ.get('TASK_QUEUE_ENABLE')}")
+    logger.info(
+        "  TORCHINDUCTOR_ASCEND_FLEX_ATTENTION_BWD_DKDV_TASKLIST = %s",
+        os.environ.get(dkdv_tasklist_env),
+    )
     logger.info(
         f"  MULTI_STREAM_MEMORY_REUSE = {os.environ.get('MULTI_STREAM_MEMORY_REUSE')}"
     )

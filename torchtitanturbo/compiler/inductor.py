@@ -4,14 +4,26 @@
 
 from __future__ import annotations
 
+import ast
+import functools
+import inspect
 import os
+import textwrap
+from collections.abc import Callable
+from typing import Any
 
 import torch
 
 from torchtitan.tools.logging import logger
 
 
+_LEGACY_BLOCK_MASK_ARITY = 13
+_DQ_SCHEDULING_FIELDS_START = 10
+_DQ_SCHEDULING_FIELDS_END = 14
 _COMPLEX_DTENSOR_STRATEGY_REGISTERED = False
+_FLEX_ATTENTION_BWD_DKDV_TASKLIST_ENV = (
+    "TORCHINDUCTOR_ASCEND_FLEX_ATTENTION_BWD_DKDV_TASKLIST"
+)
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -39,6 +51,115 @@ def _register_complex_dtensor_strategy() -> bool:
             raise
     _COMPLEX_DTENSOR_STRATEGY_REGISTERED = True
     return True
+
+
+def _configure_flex_attention_dkdv_tasklist() -> bool:
+    """Apply the compatibility mode even when torch_npu config is preloaded."""
+    import torch_npu._inductor.config as npu_config
+
+    flex_attention_config = getattr(npu_config, "flex_attention", None)
+    if flex_attention_config is None or not hasattr(
+        flex_attention_config, "bwd_dkdv_tasklist"
+    ):
+        return False
+
+    enabled = _env_flag_enabled(_FLEX_ATTENTION_BWD_DKDV_TASKLIST_ENV)
+    if flex_attention_config.bwd_dkdv_tasklist == enabled:
+        return False
+    flex_attention_config.bwd_dkdv_tasklist = enabled
+    return True
+
+
+def _block_mask_unpack_arity(handler: Callable[..., Any]) -> int | None:
+    """Return the number of fields a lowering unpacks from ``block_mask``."""
+    try:
+        source = textwrap.dedent(inspect.getsource(inspect.unwrap(handler)))
+        tree = ast.parse(source)
+    except (OSError, TypeError, SyntaxError):
+        return None
+
+    arities = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Tuple)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "block_mask"
+        ):
+            continue
+        arities.append(len(node.targets[0].elts))
+    return arities[0] if len(arities) == 1 else None
+
+
+def _legacy_npu_block_mask(block_mask: Any) -> Any:
+    """Remove PyTorch 2.14 dQ scheduling metadata for a 13-field lowering.
+
+    PyTorch autograd must retain the full 17-field tuple.  Conversion therefore
+    happens only at the NPU Inductor lowering boundary, after autograd has saved
+    ``dq_write_order*`` and ``dq_kv_order*`` for its own backward bookkeeping.
+    """
+    if not isinstance(block_mask, tuple) or len(block_mask) != 17:
+        return block_mask
+    return (
+        block_mask[:_DQ_SCHEDULING_FIELDS_START]
+        + block_mask[_DQ_SCHEDULING_FIELDS_END:]
+    )
+
+
+def _legacy_block_mask_lowering_wrapper(
+    handler: Callable[..., Any], mask_arg_index: int
+) -> Callable[..., Any]:
+    """Wrap one legacy torch_npu lowering without changing PyTorch's protocol."""
+
+    @functools.wraps(handler)
+    def compatible(*args, **kwargs):
+        if len(args) > mask_arg_index:
+            normalized = _legacy_npu_block_mask(args[mask_arg_index])
+            if normalized is not args[mask_arg_index]:
+                args = (
+                    *args[:mask_arg_index],
+                    normalized,
+                    *args[mask_arg_index + 1 :],
+                )
+        elif "block_mask" in kwargs:
+            normalized = _legacy_npu_block_mask(kwargs["block_mask"])
+            if normalized is not kwargs["block_mask"]:
+                kwargs = {**kwargs, "block_mask": normalized}
+        return handler(*args, **kwargs)
+
+    compatible._torchtitanturbo_block_mask_protocol = True
+    return compatible
+
+
+def _patch_flex_attention_block_mask_protocol() -> int:
+    """Bridge PyTorch's 17-field BlockMask to legacy 13-field NPU lowerings."""
+    # Importing the backend installs its higher-order-op lowerings.  Newer
+    # torch_npu builds may already consume 17 fields; source-based feature
+    # detection deliberately leaves those handlers untouched.
+    import torch_npu._inductor  # noqa: F401
+    from torch._inductor.lowering import lowerings
+
+    specifications = (
+        (torch.ops.higher_order.flex_attention, 4),
+        (torch.ops.higher_order.flex_attention_backward, 9),
+    )
+    patched = 0
+    for operation, mask_arg_index in specifications:
+        handler = lowerings.get(operation)
+        if handler is None or getattr(
+            handler, "_torchtitanturbo_block_mask_protocol", False
+        ):
+            continue
+        if not getattr(handler, "__module__", "").startswith("torch_npu."):
+            continue
+        if _block_mask_unpack_arity(handler) != _LEGACY_BLOCK_MASK_ARITY:
+            continue
+        lowerings[operation] = _legacy_block_mask_lowering_wrapper(
+            handler, mask_arg_index
+        )
+        patched += 1
+    return patched
 
 
 def _patch_bf16_narrowing_codegen() -> bool:
@@ -121,10 +242,22 @@ def apply_patch() -> None:
     complex_strategy_registered = False
     if _env_flag_enabled("TORCHTITAN_REGISTER_COMPLEX_DTENSOR_STRATEGY"):
         complex_strategy_registered = _register_complex_dtensor_strategy()
+    dkdv_tasklist_configured = _configure_flex_attention_dkdv_tasklist()
+    flex_attention_lowerings = _patch_flex_attention_block_mask_protocol()
     narrowing_patched = _patch_bf16_narrowing_codegen()
     addmm_patterns = _patch_low_precision_addmm_fusion()
     if complex_strategy_registered:
         logger.info("Registered aten.complex DTensor pointwise strategy")
+    if dkdv_tasklist_configured:
+        logger.info(
+            "Configured NPU FlexAttention backward dK/dV task-list mode: %s",
+            os.environ.get(_FLEX_ATTENTION_BWD_DKDV_TASKLIST_ENV, "0"),
+        )
+    if flex_attention_lowerings:
+        logger.info(
+            "Patched %d legacy NPU FlexAttention BlockMask lowerings",
+            flex_attention_lowerings,
+        )
     if narrowing_patched or addmm_patterns:
         logger.info(
             "Patched NPU Inductor BF16 rounding and %d addmm fusion patterns",
