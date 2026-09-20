@@ -24,6 +24,9 @@ _COMPLEX_DTENSOR_STRATEGY_REGISTERED = False
 _FLEX_ATTENTION_BWD_DKDV_TASKLIST_ENV = (
     "TORCHINDUCTOR_ASCEND_FLEX_ATTENTION_BWD_DKDV_TASKLIST"
 )
+_DETERMINISTIC_NPU_COMPILE_OPTIONS_ENV = (
+    "TORCHTITAN_DETERMINISTIC_NPU_COMPILE_OPTIONS"
+)
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -67,6 +70,52 @@ def _configure_flex_attention_dkdv_tasklist() -> bool:
     if flex_attention_config.bwd_dkdv_tasklist == enabled:
         return False
     flex_attention_config.bwd_dkdv_tasklist = enabled
+    return True
+
+
+def _sorted_npu_compile_options(
+    metadata: dict[str, Any], compile_option_keys: Any
+) -> dict[str, Any]:
+    """Return NPU compile options in a process-independent key order."""
+    return {
+        key: metadata[key]
+        for key in sorted(compile_option_keys)
+        if key in metadata
+    }
+
+
+def _patch_npu_compile_option_serialization() -> bool:
+    """Make generated NPU kernel metadata stable across rank processes.
+
+    torch_npu currently converts its ordered compile-option keys to a
+    ``frozenset`` and iterates that set when rebuilding the metadata mapping.
+    Python hash randomization can therefore serialize the same semantic graph
+    differently in different ranks, defeating persistent Inductor cache hits.
+    """
+    import torch_npu._inductor.select_algorithm as select_algorithm
+
+    current = getattr(
+        select_algorithm,
+        "_add_npu_template_compile_options_to_triton_meta",
+        None,
+    )
+    if current is None:
+        return False
+    if getattr(current, "_torchtitanturbo_deterministic_order", False):
+        return False
+
+    @functools.wraps(current)
+    def add_compile_options(triton_meta, meta, compile_option_keys):
+        compile_options = _sorted_npu_compile_options(meta, compile_option_keys)
+        if compile_options:
+            triton_meta.setdefault("npu_compile_options", {}).update(
+                compile_options
+            )
+
+    add_compile_options._torchtitanturbo_deterministic_order = True
+    select_algorithm._add_npu_template_compile_options_to_triton_meta = (
+        add_compile_options
+    )
     return True
 
 
@@ -243,6 +292,19 @@ def apply_patch() -> None:
     if _env_flag_enabled("TORCHTITAN_REGISTER_COMPLEX_DTENSOR_STRATEGY"):
         complex_strategy_registered = _register_complex_dtensor_strategy()
     dkdv_tasklist_configured = _configure_flex_attention_dkdv_tasklist()
+    compile_options_order_patched = False
+    deterministic_compile_options = os.environ.get(
+        _DETERMINISTIC_NPU_COMPILE_OPTIONS_ENV, "1"
+    )
+    if deterministic_compile_options not in ("0", "1"):
+        raise ValueError(
+            f"{_DETERMINISTIC_NPU_COMPILE_OPTIONS_ENV} must be 0 or 1; "
+            f"got {deterministic_compile_options!r}"
+        )
+    if deterministic_compile_options == "1":
+        compile_options_order_patched = (
+            _patch_npu_compile_option_serialization()
+        )
     flex_attention_lowerings = _patch_flex_attention_block_mask_protocol()
     narrowing_patched = _patch_bf16_narrowing_codegen()
     addmm_patterns = _patch_low_precision_addmm_fusion()
@@ -252,6 +314,10 @@ def apply_patch() -> None:
         logger.info(
             "Configured NPU FlexAttention backward dK/dV task-list mode: %s",
             os.environ.get(_FLEX_ATTENTION_BWD_DKDV_TASKLIST_ENV, "0"),
+        )
+    if compile_options_order_patched:
+        logger.info(
+            "Patched deterministic NPU compile-option serialization for cache reuse"
         )
     if flex_attention_lowerings:
         logger.info(
