@@ -17,7 +17,9 @@ from torch.distributed._functional_collectives import all_to_all_single
 from torchtitan.models.common.moe import RoutedExperts
 from torchtitan.models.common.token_dispatcher import AllToAllTokenDispatcher
 from torchtitan.protocols.model import ModelConfigConverter
-from torchtitan.tools.logging import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class NPUMoeTokenUnpermute(torch.autograd.Function):

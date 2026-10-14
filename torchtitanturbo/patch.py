@@ -10,11 +10,13 @@ logic (``_npu_available``) was migrated here from the core repo's former
 ``npu/adapt/patches.py`` (that directory is no longer used).
 """
 
+import logging
 import os
+from importlib.util import find_spec
 
 import torch
 
-from torchtitan.tools.logging import logger
+logger = logging.getLogger(__name__)
 
 
 def _npu_available() -> bool:
@@ -70,6 +72,22 @@ def apply_all_patches():
         return
 
     set_environ_variable()
+
+    # TorchTitan main removed the former global distributed.compile entry
+    # point while migrating compilation and models to config-first APIs. The
+    # legacy Turbo patch bundle imports several other removed protocols, so do
+    # not partially install it against this API generation. GLM has a fully
+    # migrated, independently validated patch and remains safe to install.
+    if find_spec("torchtitan.distributed.compile") is None:
+        from torchtitanturbo.models.glm5 import apply_glm5_patch
+
+        apply_glm5_patch()
+        logger.warning(
+            "Detected config-first TorchTitan main: applied the migrated GLM "
+            "patch only; legacy common/distributed converters require a "
+            "separate upstream-API migration"
+        )
+        return
 
     from torchtitanturbo.tools import (
         apply_compile_patch,

@@ -11,7 +11,9 @@ from torch.distributed.tensor.parallel import (
     SequenceParallel,
 )
 
-from torchtitan.tools.logging import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _qwen3_apply_non_moe_tp(

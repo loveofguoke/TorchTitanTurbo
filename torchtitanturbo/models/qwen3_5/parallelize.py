@@ -42,7 +42,9 @@ from torchtitan.distributed.fsdp import (
 )
 from torchtitan.distributed.tensor_parallel import NoParallel
 from .model import Qwen35Model
-from torchtitan.tools.logging import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Qwen35ExpertParallel(ParallelStyle):

@@ -70,6 +70,8 @@ def apply_patch():
     import torch.distributed.fsdp._fully_shard._fsdp_collectives
 
     torch.distributed.fsdp._fully_shard._fsdp_collectives._get_gradient_divide_factors = _get_gradient_divide_factors
-    from torchtitan.tools.logging import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
     logger.info("Patched _get_gradient_divide_factors for NPU")

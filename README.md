@@ -48,7 +48,7 @@ This enables:
 - NPU profiler support
 - NPU peak flops calculation
 - NPU RoPE optimization
-- GLM-5 NPU-safe DTensor router gather
+- GLM-5 NPU-safe initialization and vocab-parallel loss contracts
 
 GLM-5 is the compatibility scope reviewed against the adjacent TorchTitan and
 torchtitan-test checkouts. DeepSeek, Qwen, and legacy Llama modules are separate
@@ -136,9 +136,13 @@ are properly replaced.
 | `_get_gradient_divide_factors` | `torch.distributed.fsdp` | - | NPU gradient handling |
 | `update_from_config` | `DeepSeekV3ModelArgs` | - | DeepSeek config |
 | `apply_non_moe_tp` | `qwen3.infra.parallelize` | - | Qwen3 TP |
-| GLM-5 router config factory | `torchtitan.models.glm5` | rank-local `gather` | Preserve TP/SP placements while avoiding the NPU DTensor gather backward shape bug |
 | GLM-5 parameter initializers | `torchtitan.models.glm5` initializer tables/factories | elementwise inverse-CDF initialization | Avoid DTensor scalar collectives and inconsistent HCCL subgroup initialization |
 | Vocab-parallel CE forward/backward | `torchtitan.components.loss._LossParallelCrossEntropy` | `where`, `gather`, `scatter`, functional all-reduce | Avoid the unsupported NPU boolean-index/`aclnnNonzeroV2` path |
+
+GLM routing itself is no longer monkey-patched. Current TorchTitan's native
+group-limited router preserves padding masks, auxiliary-loss accounting,
+rematerialization, expert bias, and HiMidLo gradients; Turbo must not replace
+that behavior with an older copied forward implementation.
 
 ## Training Configurations
 

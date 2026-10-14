@@ -17,7 +17,9 @@ from torch import nn
 from torchtitan.models.common.nn_modules import RMSNorm
 from torchtitan.protocols.model import ModelConfigConverter
 from torchtitan.protocols.module import Module
-from torchtitan.tools.logging import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class NpuRMSNorm(Module):

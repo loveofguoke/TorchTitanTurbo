@@ -13,7 +13,9 @@ import sys
 from typing import Any
 
 from torchtitan.distributed import compile as compile_module
-from torchtitan.tools.logging import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 _ORIGINAL_APPLY_COMPILE = compile_module.apply_compile

@@ -57,9 +57,35 @@ that shared infrastructure is installed before model-specific adapters.
 | 5 | `torchtitanturbo.distributed.fsdp` | `torch.distributed.fsdp._fully_shard._fsdp_collectives._get_gradient_divide_factors` | Use SUM plus explicit division where NPU collectives cannot use the upstream AVG path. |
 | 6 | `torchtitanturbo.models.deepseek_v3.patch` | `DeepSeekV3ModelArgs.update_from_config` and registered DeepSeek configs | Apply the NPU-compatible attention/configuration policy. |
 | 7 | `torchtitanturbo.models.qwen3.patch` | `torchtitan.models.qwen3.infra.parallelize.apply_non_moe_tp` | Install the NPU-compatible Qwen3 non-MoE TP plan. |
-| 8 | `torchtitanturbo.models.glm5.patch` | GLM router construction, GLM parameter initializers, and TorchTitan vocab-parallel CE | Fix the GLM-specific NPU DTensor initialization, routing, and TP-loss paths described below. |
+| 8 | `torchtitanturbo.models.glm5.patch` | GLM flavor parameter initializers and TorchTitan vocab-parallel CE | Fix NPU DTensor initialization and TP-loss paths without replacing current upstream Router semantics. |
 
 ## Patch details
+
+### Opt-in system optimization strategy prototypes
+
+`torchtitanturbo.optimizations.system_strategies` provides a default-off typed
+experiment surface for AutoParallel, Async TP, FSDP AG/RS and dense-region
+overlap, EP overlap, activation memory policies, FSDP CPU state offload, and
+asynchronous checkpointing. It validates combinations and translates them to
+existing TorchTitan configuration; it does not patch or copy those algorithms.
+GraphTrainer remains an explicitly selected Trainer recipe--the prototype never
+pretends it can be entered through regular-Trainer `--compile.enable` or
+`--compile.mode` flags. Its reference configuration is a true no-op and emits
+no override.
+
+GTP rematerialization and NVMe offload are recorded as explicit unsupported
+identities until TorchTitan has a PyTorch-native executor. Selecting either
+fails before launch instead of importing Megatron/DeepSpeed or silently using
+a different offload tier.
+
+Implementation: `torchtitanturbo/optimizations/system_strategies.py`
+
+Validated command/provenance renderer:
+`python -m torchtitanturbo.optimizations.cli`. It only renders overrides for an
+already selected recipe; training lifecycle remains in `torchtitan-test`.
+Provider selection/package preflight is available separately through
+`python -m torchtitanturbo.optimizations.providers_cli`; package presence is
+never reported as runtime acceptance.
 
 ### Peak-FLOPS reporting
 
@@ -200,6 +226,13 @@ The GLM patch is deliberately attached to TorchTitan's existing GLM model. It
 does not copy the model into Turbo and does not change the device-neutral GLM
 math stored in TorchTitan.
 
+After the 2026-10-13 migration to TorchTitan's config-first model API, the
+initializer target is `torchtitan.models.glm5.flavors`. The former Router
+factory patch is intentionally removed: upstream now supplies the required
+FP32 gate through `HiMidLoLinear`, while its current forward also carries
+padding-mask, auxiliary-loss, rematerialization, and grouped-selection
+contracts that the old Turbo copy did not implement.
+
 #### Router construction and DTensor gather
 
 Target:
@@ -273,6 +306,37 @@ Implementation: `torchtitanturbo/models/glm5/patch.py`
 
 ### Opt-in graph compatibility
 
+For compiled pipeline parallelism, dynamic `PipelineStage` metadata inference
+executes a real forward on every stage in pipeline order. Cold compilation is
+therefore serialized inside the metadata P2P chain. The diagnostic precompile
+path accepts a representative shape through
+`TORCHTITAN_PIPELINE_STAGE_PRECOMPILE_SHAPE=T,D` and the real dtype through
+`TORCHTITAN_PIPELINE_STAGE_PRECOMPILE_DTYPE`; inferring it from BF16 parameters
+is incorrect when the pipeline activation contract is FP32 and would create a
+second Dynamo specialization. This path and the host-store transport remain
+diagnostic only. They do not replace PyTorch's metadata algorithm and are not
+the PP8 fix. The production direction is PyTorch's public static PipelineStage
+contract (`input_args`/`output_args`, plus grad metadata for DTensors) or the
+unchanged dynamic metadata protocol.
+
+The supported compatibility path is
+`TORCHTITAN_PIPELINE_METADATA_FORCE_EAGER=1`. It calls the unchanged PyTorch
+dynamic metadata implementation inside the public
+`torch.compiler.set_stance("force_eager")` context. Metadata still comes from
+the real upstream stage and follows the original transport. The installed
+PyTorch build does not yet expose `PipelineStage.register_forward_context`, so
+Turbo provides only this narrow integration bridge; it does not manufacture
+input/output or gradient metadata.
+
+`TORCHTITAN_PIPELINE_REAL_INPUT_PRECOMPILE=1` complements that bridge for cold
+compiled PP. A temporary forward pre-hook records the real args/kwargs received
+by each stage during PyTorch's unchanged dynamic metadata probe. Each rank then
+builds its local forward/backward cache before schedule P2P, restores CPU/device
+RNG state, module buffers, and parameter gradients, and waits on the torchrun
+rendezvous store. The store is only a compilation-completion barrier; metadata,
+activations, activation gradients, and training collectives retain their
+original PyTorch/torch_npu transports.
+
 Target modules include the torch_npu Triton autotuners, TorchTitan
 `GroupedExperts`, PyTorch DTensor pointwise registration, PipelineStage
 metadata exchange, and the torch_npu graph-tree skip policy. These patches are
@@ -310,6 +374,31 @@ and why each patch family entered the branch:
 | `36cbba6` | Added the NPU-safe TP vocab-parallel loss implementation to avoid `aclnnNonzeroV2`. |
 
 ## Patches versus converters
+
+Default-off third-party kernel providers live under
+`torchtitanturbo/optimizations/`. They are neither global patches nor automatic
+converters. Importing Turbo does not load their external dependencies. The
+first prototype, `DeepSelectTopKProvider`, validates the official DeepSelect
+platform/dtype/layout contract but is not wired into GLM-5 because the current
+Ascend kernel accepts BF16 while GLM-5 intentionally ranks DSA scores in FP32.
+`DeepGemmGroupedBf16Provider` is likewise default-off. It adapts TorchTitan
+grouped-MM layouts and implements dX/dW with the official Ascend M-grouped NN
+and K-grouped TN APIs. It remains ineligible for default model wiring until the
+real-library, graph, distributed, activation-checkpoint, and checkpoint
+contracts are validated.
+The same package also contains default-off capability adapters for TileKernels
+MoE TopK, FlashMLA Ascend sparse prefill, and DeepEP-Ascend EPBuffer. None is
+installed by `apply_all_patches()`: TileKernels still needs router/fullgraph
+parity and FlashMLA is forward-only under its public Ascend API.
+
+DeepEP-Ascend additionally has a formal `BaseEPTokenDispatcher` implementation
+and an explicit `ModelConfigConverter`. The converter targets only a configured
+TorchTitan `DeepEPTokenDispatcher`; standard AllToAll remains unchanged. The
+dispatcher preserves the official expanded-layout contract: expert counts come
+from the handle prefix sums, routing weights are applied once before combine,
+and dispatch/combine retain their autograd dual. It remains default-off pending
+supported-hardware EP2/EP8 validation, and rejects `torch.compile` because the
+official Ascend backend does not currently support graph capture.
 
 The following common NPU implementations are converters, not automatic global
 patches:

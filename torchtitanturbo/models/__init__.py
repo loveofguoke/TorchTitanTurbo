@@ -1,16 +1,27 @@
 # Copyright (c) 2026 Huawei Technologies Co., Ltd. All rights reserved.
 
-from .common import (
-    NpuGroupedExperts,
-    NpuGroupedExpertsConverter,
-    NpuTokenDispatcher,
-    NpuTokenDispatcherConverter,
-    NpuRMSNorm,
-    NpuRMSNormConverter,
-    NpuScaledDotProductAttention,
-    NpuSDPAConverter,
-    apply_rope_patch,
-)
+_COMMON_EXPORTS = {
+    "NpuGroupedExperts",
+    "NpuGroupedExpertsConverter",
+    "NpuTokenDispatcher",
+    "NpuTokenDispatcherConverter",
+    "NpuRMSNorm",
+    "NpuRMSNormConverter",
+    "NpuScaledDotProductAttention",
+    "NpuSDPAConverter",
+    "apply_rope_patch",
+}
+
+
+def __getattr__(name: str):
+    """Load optional common converters only when a caller requests one."""
+    if name not in _COMMON_EXPORTS:
+        raise AttributeError(name)
+    from . import common
+
+    value = getattr(common, name)
+    globals()[name] = value
+    return value
 
 
 def apply_deepseek_patch():
@@ -44,15 +55,7 @@ def apply_glm5_patch():
 
 
 __all__ = [
-    "NpuGroupedExperts",
-    "NpuGroupedExpertsConverter",
-    "NpuTokenDispatcher",
-    "NpuTokenDispatcherConverter",
-    "NpuRMSNorm",
-    "NpuRMSNormConverter",
-    "NpuScaledDotProductAttention",
-    "NpuSDPAConverter",
-    "apply_rope_patch",
+    *_COMMON_EXPORTS,
     "apply_deepseek_patch",
     "apply_qwen3_patch",
     "apply_glm5_patch",

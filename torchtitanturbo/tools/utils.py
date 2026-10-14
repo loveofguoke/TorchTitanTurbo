@@ -2,7 +2,9 @@
 
 import subprocess
 
-from torchtitan.tools.logging import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def get_peak_flops(device_name: str) -> float:

@@ -28,7 +28,9 @@ from typing import Any
 
 import torch
 
-from torchtitan.tools.logging import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 ENV_PREFIX = "TORCHTITAN_NPU_PROFILER_"

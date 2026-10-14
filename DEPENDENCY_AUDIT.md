@@ -12,17 +12,23 @@ Python package dependency has no version bound.
   `../torchtitan-test`.
 
 For GLM-5, also read
-`../torchtitan/torchtitan/models/glm5/DEPENDENCY_AUDIT.md` and
-`../torchtitan-test/DEPENDENCY_AUDIT.md`.
+`D:/yyb/huawei/glm/weeks/weekx/98_TorchTitan提交核验/TorchTitan三仓依赖审计.md`
+and `../torchtitan-test/DEPENDENCY_AUDIT.md`.
 
 ## Patch dependency map
 
 | Turbo surface | Upstream dependency | Downstream validation |
 |---|---|---|
-| `models/glm5/patch.py` router | `models/common/moe.py::TokenChoiceTopKRouter`, GLM router config factory | Turbo router contract test, EP smoke/parity/precision |
+| `models/glm5/patch.py` initialization and loss | `models/glm5/flavors.py` initializer factories and `components.loss._LossParallelCrossEntropy` | GLM patch test, TP/EP smoke/parity/precision |
 | GLM parameter initialization patch | GLM config factories and parameter-init dictionaries | GLM patch unit test, multi-axis TP/EP smoke |
+| optional DeepSelect provider | DeepSelect public TopK API and GLM `DSAIndexerTopK` score contract | capability unit tests; fixed-input DSA accuracy; Dynamo/fake/fullgraph and recompile checks before model wiring |
+| optional DeepGEMM provider | DeepGEMM-Ascend M-grouped BF16 NT/NN and K-grouped TN APIs plus `GroupedExperts._grouped_mm` layout contract | capability/autograd contract tests; official microbenchmarks; real-library dX/dW, fake/fullgraph, empty-expert, EP and checkpoint checks before default wiring |
+| optional TileKernels provider | TileKernels FP32 MoE `topk_gate` and GLM router selection contract | capability/tie tests; router contract; fixed-input parity; fullgraph before wiring |
+| optional FlashMLA provider | FlashMLA Ascend `flash_mla_sparse_fwd` and GLM sparse-attention layout | shape capability tests; forward oracle; reject training without backward; graph checks |
+| optional DeepEP dispatcher | DeepEP-Ascend `EPBuffer` lifecycle, expanded-layout handle metadata, and TorchTitan `BaseEPTokenDispatcher`/runtime-capacity protocol | mocked converter/wiring/count/weight/autograd/teardown contracts; EP2/EP8 backward, handles/streams, empty experts, checkpoint, numerics and graph rejection tests on supported NPU |
+| system optimization strategy prototypes | GraphTrainer AutoParallel, Async TP, FSDP/EP overlap and activation offload flags; Trainer FSDP CPU offload; DCP async modes | pure config translation and rejection tests; each selected strategy still requires its existing TorchTitan integration/numerics test and an Ascend profiler-off A/B |
 | NPU vocab-parallel loss | `components.loss._LossParallelCrossEntropy` | TP smoke, TP precision and backward comparison |
-| `graph_compat.py` and compile patches | TorchTitan model/parallel call graph plus torch_npu private APIs | graph debug, graph smoke, eager-vs-graph precision/performance |
+| `graph_compat.py` and compile patches | TorchTitan model/parallel call graph, `PipelineStage._forward_metadata_inference`, plus torch_npu private APIs | graph debug, PP cold-start, graph smoke, eager-vs-graph precision/performance |
 | profiler integration | Trainer profiler hooks and torch_npu profiler API, including stack and memory-timeline export contracts | performance probe, flamegraph/memory/all presets, offline analysis, and visualization report |
 | import-time patch bootstrap | all patch modules above | patch status/idempotency tests and one NPU import smoke test |
 
@@ -33,6 +39,11 @@ and the Ascend implementation must not depend on it. Consequently the exact
 BF16-input/FP32-gate contract is owned and behaviorally tested here through
 `NpuFp32RouterLinear` and `NpuGlm5TokenChoiceTopKRouter`; downstream CPU parity
 tests validate only TorchTitan's generic module-call contract.
+
+The 2026-10-13 upstream sync removes Turbo's GLM Router replacement. Current
+TorchTitan uses `HiMidLoLinear` for the FP32 gate and its Router now owns
+padding-mask, auxiliary-loss, rematerialization, and group-limited selection
+semantics. Turbo must not replace that forward with the older copied algorithm.
 
 The graph private-symbol audit was last repeated against TorchTitan
 `59899ade`, torch `2.14.0.dev20260805+cpu`, and torch_npu `2.14.0`. It resolved

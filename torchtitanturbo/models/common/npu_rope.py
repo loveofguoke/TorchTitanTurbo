@@ -15,7 +15,9 @@ import spmd_types as spmd
 import torch
 import torch_npu
 
-from torchtitan.tools.logging import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @spmd.local_map(

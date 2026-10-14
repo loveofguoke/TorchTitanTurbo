@@ -4,17 +4,26 @@ import unittest
 
 import torch
 
-from torchtitan.models.glm5 import glm5_configs
+from torchtitan.config.parallelism import ParallelismConfig
+from torchtitan.models.glm5 import build_model_config
 from torchtitan.models.glm5.dsa import Glm5FlexAttention
 from torchtitanturbo.models.glm5.patch import apply_patch
 
 
 class TestGlm5DsaContract(unittest.TestCase):
     def test_patch_preserves_sparse_config_and_index_sources(self):
-        before = glm5_configs["shared_dsa_debugmodel"]()
+        before = build_model_config(
+            "shared_dsa_debugmodel",
+            parallelism=ParallelismConfig(),
+            seq_len=128,
+        )
         apply_patch()
         apply_patch()
-        after = glm5_configs["shared_dsa_debugmodel"]()
+        after = build_model_config(
+            "shared_dsa_debugmodel",
+            parallelism=ParallelismConfig(),
+            seq_len=128,
+        )
         self.assertEqual(after.index_sources, before.index_sources)
         for original, patched in zip(before.layers, after.layers, strict=True):
             self.assertIsInstance(patched.attention.inner_attention, Glm5FlexAttention.Config)

@@ -20,7 +20,9 @@ from torch.distributed.tensor import DTensor
 from torchtitan.models.common.moe import GroupedExperts, RoutedExperts
 from torchtitan.protocols.model import ModelConfigConverter
 from torchtitan.protocols.module import Module
-from torchtitan.tools.logging import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def npu_grouped_mm(x, weight, group_list):

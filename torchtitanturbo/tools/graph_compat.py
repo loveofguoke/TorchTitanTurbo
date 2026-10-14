@@ -23,16 +23,247 @@ coverage or launch behavior even when its eager mathematics is equivalent.
 from __future__ import annotations
 
 import inspect
+import logging
 import operator
 import os
+import pickle
+from datetime import timedelta
 from typing import Callable
 
 import torch
 
-from torchtitan.tools.logging import logger
+logger = logging.getLogger(__name__)
 
 
 _COMPLEX_STRATEGY_REGISTERED = False
+
+
+def _pipeline_stage_precompile_shapes() -> tuple[tuple[int, int], ...]:
+    value = os.environ.get("TORCHTITAN_PIPELINE_STAGE_PRECOMPILE_SHAPE")
+    if value in (None, ""):
+        return ()
+    try:
+        shapes = tuple(
+            tuple(int(item.strip()) for item in shape.split(","))
+            for shape in value.split(";")
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "TORCHTITAN_PIPELINE_STAGE_PRECOMPILE_SHAPE must be "
+            "NUM_TOKENS,HIDDEN_DIM[;NUM_TOKENS,HIDDEN_DIM...]"
+        ) from error
+    if any(len(shape) != 2 or any(dim <= 0 for dim in shape) for shape in shapes):
+        raise ValueError(
+            "TORCHTITAN_PIPELINE_STAGE_PRECOMPILE_SHAPE must contain positive "
+            "two-dimensional shapes"
+        )
+    return shapes
+
+
+def _pipeline_stage_precompile_dtype() -> torch.dtype:
+    value = os.environ.get("TORCHTITAN_PIPELINE_STAGE_PRECOMPILE_DTYPE")
+    if value in (None, ""):
+        raise ValueError(
+            "TORCHTITAN_PIPELINE_STAGE_PRECOMPILE_DTYPE is required when "
+            "TORCHTITAN_PIPELINE_STAGE_PRECOMPILE_SHAPE is enabled"
+        )
+    dtype = getattr(torch, value, None)
+    if not isinstance(dtype, torch.dtype) or not dtype.is_floating_point:
+        raise ValueError(
+            "TORCHTITAN_PIPELINE_STAGE_PRECOMPILE_DTYPE must name a floating-point "
+            "torch dtype"
+        )
+    return dtype
+
+
+def _floating_tensors(value: object) -> list[torch.Tensor]:
+    if isinstance(value, torch.Tensor):
+        return [value] if value.is_floating_point() and value.requires_grad else []
+    if isinstance(value, (tuple, list)):
+        return [tensor for item in value for tensor in _floating_tensors(item)]
+    if isinstance(value, dict):
+        return [tensor for item in value.values() for tensor in _floating_tensors(item)]
+    return []
+
+
+def _clone_precompile_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    clone = tensor.detach().clone()
+    if tensor.is_floating_point() and tensor.requires_grad:
+        clone.requires_grad_(True)
+    return clone
+
+
+def _precompile_pipeline_stage(
+    stage,
+    args: tuple[torch.Tensor, ...] | object | None,
+    kwargs: dict[str, object] | None,
+    shapes: tuple[tuple[int, int], ...],
+    activation_dtype: torch.dtype,
+) -> None:
+    if getattr(stage, "_torchtitanturbo_stage_precompiled", False):
+        return
+
+    if isinstance(args, tuple) and all(
+        isinstance(item, torch.Tensor) for item in args
+    ):
+        root_args = tuple(_clone_precompile_tensor(item) for item in args)
+        full_num_tokens = root_args[0].shape[0]
+        input_sets = [root_args]
+        for num_tokens, _ in shapes:
+            if num_tokens == full_num_tokens:
+                continue
+            input_sets.append(
+                tuple(
+                    item[:num_tokens].detach().clone()
+                    if item.ndim > 0 and item.shape[0] == full_num_tokens
+                    else item.detach().clone()
+                    for item in root_args
+                )
+            )
+    else:
+        input_sets = [
+            (
+                torch.empty(
+                    shape,
+                    device=stage.device,
+                    dtype=activation_dtype,
+                    requires_grad=True,
+                ),
+            )
+            for shape in shapes
+        ]
+
+    buffer_backup = [
+        (buffer, buffer.detach().clone())
+        for buffer in stage.submod.buffers(recurse=True)
+    ]
+    parameter_grad_backup = [
+        (
+            parameter,
+            None if parameter.grad is None else parameter.grad.detach().clone(),
+        )
+        for parameter in stage.submod.parameters()
+    ]
+    cpu_rng_state = torch.get_rng_state()
+    device_module = getattr(torch, stage.device.type, None)
+    device_rng_state = (
+        device_module.get_rng_state(stage.device)
+        if device_module is not None
+        and hasattr(device_module, "get_rng_state")
+        and stage.device.type != "cpu"
+        else None
+    )
+    try:
+        for precompile_args in input_sets:
+            with torch.enable_grad():
+                outputs = stage.submod(*precompile_args, **(kwargs or {}))
+                differentiable = _floating_tensors(outputs)
+                if differentiable:
+                    differentiable_inputs = [
+                        tensor
+                        for tensor in precompile_args
+                        if tensor.is_floating_point() and tensor.requires_grad
+                    ]
+                    if differentiable_inputs:
+                        torch.autograd.grad(
+                            differentiable,
+                            differentiable_inputs,
+                            grad_outputs=[
+                                torch.ones_like(tensor) for tensor in differentiable
+                            ],
+                            allow_unused=True,
+                        )
+
+                    outputs = stage.submod(*precompile_args, **(kwargs or {}))
+                    differentiable = _floating_tensors(outputs)
+                    torch.autograd.backward(
+                        differentiable,
+                        [torch.ones_like(tensor) for tensor in differentiable],
+                    )
+            for parameter, _ in parameter_grad_backup:
+                parameter.grad = None
+    finally:
+        for parameter, saved_grad in parameter_grad_backup:
+            parameter.grad = saved_grad
+        with torch.no_grad():
+            for buffer, saved in buffer_backup:
+                buffer.copy_(saved)
+        torch.set_rng_state(cpu_rng_state)
+        if device_rng_state is not None:
+            device_module.set_rng_state(device_rng_state, stage.device)
+
+    stage._torchtitanturbo_stage_precompiled = True
+    logger.info(
+        "Precompiled pipeline stage %s with captured real inputs before schedule P2P",
+        stage.stage_index,
+    )
+
+
+def _wait_for_pipeline_stage_precompile(stage) -> None:
+    if stage.num_stages != stage.group_size:
+        raise RuntimeError(
+            "Pipeline stage precompile currently requires one stage per PP rank"
+        )
+    from torch.distributed.distributed_c10d import _get_default_store
+
+    store = _get_default_store()
+    prefix = "torchtitanturbo/pipeline_stage_precompile"
+    store.set(f"{prefix}/{stage.stage_index}", b"ready")
+    store.wait(
+        [f"{prefix}/{stage_index}" for stage_index in range(stage.num_stages)],
+        timedelta(minutes=30),
+    )
+
+
+def _install_first_all_reduce_host_barrier() -> None:
+    """Align ranks before each compiled-training all-reduce.
+
+    Ascend Inductor autotuning can finish at different times on different ranks.
+    Entering HCCL on a fast rank while another rank is still compiling consumes
+    the process-group watchdog budget before the collective can be formed. The
+    rendezvous store is control-plane only; tensor transport and reduction remain
+    the original PyTorch/HCCL all-reduce.
+    """
+
+    import torch.distributed as dist
+    from torch.distributed.distributed_c10d import _get_default_store
+
+    original = dist.all_reduce
+    if getattr(original, "_torchtitanturbo_first_collective_barrier", False):
+        return
+
+    group_sequences: dict[tuple[int, ...], int] = {}
+
+    def all_reduce(*args, **kwargs):
+        if dist.is_initialized() and dist.get_world_size() > 1:
+            group = kwargs.get("group")
+            if group is None and len(args) > 2:
+                group = args[2]
+            group_ranks = tuple(dist.get_process_group_ranks(group))
+            sequence = group_sequences.get(group_ranks, 0)
+            store = _get_default_store()
+            group_key = "-".join(str(peer) for peer in group_ranks)
+            prefix = (
+                f"torchtitanturbo/all_reduce_ready/{group_key}/{sequence}"
+            )
+            rank = dist.get_rank()
+            store.set(f"{prefix}/{rank}", b"ready")
+            store.wait(
+                [f"{prefix}/{peer}" for peer in group_ranks],
+                timedelta(minutes=30),
+            )
+            if sequence == 0:
+                logger.info(
+                    "All process-group ranks %s reached their first training "
+                    "all-reduce",
+                    group_ranks,
+                )
+            group_sequences[group_ranks] = sequence + 1
+        return original(*args, **kwargs)
+
+    all_reduce._torchtitanturbo_first_collective_barrier = True
+    dist.all_reduce = all_reduce
+    logger.info("Enabled host-store ordering barriers for training all-reduce calls")
 
 
 def _enabled(name: str) -> bool:
@@ -156,7 +387,7 @@ def _install_safe_empty_grouped_mm() -> None:
     removed after compute. Fake and autograd registrations let Dynamo/AOT reason
     about the op without executing device code during tracing.
     """
-    from torchtitan.models.common.moe import GroupedExperts
+    from torchtitan.models.common.linear import GroupedLinear
 
     namespace = "torchtitanturbo_graph"
     try:
@@ -243,14 +474,14 @@ def _install_safe_empty_grouped_mm() -> None:
 
         safe_grouped_mm.register_autograd(backward, setup_context=setup_context)
 
-    if not getattr(GroupedExperts, "_torchtitanturbo_empty_gmm", False):
+    if not getattr(GroupedLinear, "_torchtitanturbo_empty_gmm", False):
 
         def grouped_mm(self, *, A, B_t, offs):
             del self
             return safe_grouped_mm(A, B_t, offs)
 
-        GroupedExperts._grouped_mm = grouped_mm
-        GroupedExperts._torchtitanturbo_empty_gmm = True
+        GroupedLinear._grouped_mm = grouped_mm
+        GroupedLinear._torchtitanturbo_empty_gmm = True
     logger.info("Enabled empty-expert grouped-mm compatibility")
 
 
@@ -302,6 +533,163 @@ def _install_pipeline_metadata_p2p() -> None:
     PipelineStage._send_meta = send_meta
     PipelineStage._torchtitanturbo_meta_p2p = True
     logger.info("Enabled non-batched PipelineStage metadata P2P")
+
+
+def _install_pipeline_metadata_force_eager() -> None:
+    """Keep PyTorch's dynamic metadata protocol out of compiled regions."""
+
+    from torch.distributed.pipelining.stage import PipelineStage
+
+    if getattr(PipelineStage, "_torchtitanturbo_metadata_force_eager", False):
+        return
+    original_forward = PipelineStage._forward_metadata_inference
+    original_backward = PipelineStage._backward_metadata_inference
+    precompile_real_inputs = _enabled(
+        "TORCHTITAN_PIPELINE_REAL_INPUT_PRECOMPILE"
+    )
+
+    def forward_metadata_inference(self, args, kwargs=None, has_backward=False):
+        captured = {}
+
+        def capture_inputs(module, hook_args, hook_kwargs):
+            captured["args"] = tuple(
+                _clone_precompile_tensor(item)
+                if isinstance(item, torch.Tensor)
+                else item
+                for item in hook_args
+            )
+            captured["kwargs"] = {
+                key: _clone_precompile_tensor(value)
+                if isinstance(value, torch.Tensor)
+                else value
+                for key, value in hook_kwargs.items()
+            }
+
+        handle = None
+        if precompile_real_inputs:
+            handle = self.submod.register_forward_pre_hook(
+                capture_inputs, with_kwargs=True
+            )
+        try:
+            with torch.compiler.set_stance("force_eager"):
+                result = original_forward(self, args, kwargs, has_backward)
+        finally:
+            if handle is not None:
+                handle.remove()
+
+        if precompile_real_inputs:
+            if "args" not in captured:
+                raise RuntimeError(
+                    "Pipeline metadata inference did not execute the stage; "
+                    "real-input precompile cannot continue"
+                )
+            _precompile_pipeline_stage(
+                self,
+                captured["args"],
+                captured["kwargs"],
+                (),
+                torch.float32,
+            )
+            _wait_for_pipeline_stage_precompile(self)
+        return result
+
+    def backward_metadata_inference(
+        self,
+        loss_fn=None,
+        target=None,
+        received_grad_meta=None,
+        loss_kwargs=None,
+    ):
+        with torch.compiler.set_stance("force_eager"):
+            return original_backward(
+                self,
+                loss_fn=loss_fn,
+                target=target,
+                received_grad_meta=received_grad_meta,
+                loss_kwargs=loss_kwargs,
+            )
+
+    forward_metadata_inference._torchtitanturbo_force_eager = True
+    backward_metadata_inference._torchtitanturbo_force_eager = True
+    PipelineStage._forward_metadata_inference = forward_metadata_inference
+    PipelineStage._backward_metadata_inference = backward_metadata_inference
+    PipelineStage._torchtitanturbo_metadata_force_eager = True
+    logger.info("Enabled eager execution for dynamic pipeline metadata inference")
+
+
+def _install_pipeline_metadata_store_transport() -> None:
+    from torch.distributed.distributed_c10d import _get_default_store
+    from torch.distributed.pipelining.stage import PipelineStage
+
+    if getattr(PipelineStage, "_torchtitanturbo_meta_store", False):
+        return
+
+    def next_sequence(self, direction: str, peer_stage: int) -> int:
+        attribute = f"_torchtitanturbo_meta_{direction}_sequence"
+        sequences = getattr(self, attribute, None)
+        if sequences is None:
+            sequences = {}
+            setattr(self, attribute, sequences)
+        sequence = sequences.get(peer_stage, 0)
+        sequences[peer_stage] = sequence + 1
+        return sequence
+
+    def key(self, src_stage: int, dst_stage: int, sequence: int) -> str:
+        src_rank = self._resolve_peer_global_rank(src_stage)
+        dst_rank = self._resolve_peer_global_rank(dst_stage)
+        return (
+            "torchtitanturbo/pipeline_metadata/"
+            f"{src_rank}/{dst_rank}/{src_stage}/{dst_stage}/{sequence}"
+        )
+
+    def recv_meta(self, src_stage):
+        sequence = next_sequence(self, "recv", src_stage)
+        payload = _get_default_store().get(
+            key(self, src_stage, self.stage_index, sequence)
+        )
+        return pickle.loads(payload)
+
+    def send_meta(self, meta, dst_stage):
+        sequence = next_sequence(self, "send", dst_stage)
+        _get_default_store().set(
+            key(self, self.stage_index, dst_stage, sequence),
+            pickle.dumps(meta, protocol=pickle.HIGHEST_PROTOCOL),
+        )
+
+    PipelineStage._recv_meta = recv_meta
+    PipelineStage._send_meta = send_meta
+    PipelineStage._torchtitanturbo_meta_store = True
+    logger.info("Enabled host-store PipelineStage metadata transport")
+
+
+def _install_pipeline_stage_precompile() -> None:
+    from torch.distributed.pipelining.stage import PipelineStage
+
+    shapes = _pipeline_stage_precompile_shapes()
+    if not shapes:
+        return
+    activation_dtype = _pipeline_stage_precompile_dtype()
+    if getattr(
+        PipelineStage._forward_metadata_inference,
+        "_torchtitanturbo_stage_precompile",
+        False,
+    ):
+        return
+
+    original = PipelineStage._forward_metadata_inference
+
+    def forward_metadata_inference(self, args, kwargs=None, has_backward=False):
+        _precompile_pipeline_stage(self, args, kwargs, shapes, activation_dtype)
+        _wait_for_pipeline_stage_precompile(self)
+        return original(self, args, kwargs, has_backward)
+
+    forward_metadata_inference._torchtitanturbo_stage_precompile = True
+    PipelineStage._forward_metadata_inference = forward_metadata_inference
+    logger.info(
+        "Enabled concurrent pipeline stage precompile with input shape %s and dtype %s",
+        shapes,
+        activation_dtype,
+    )
 
 
 def _install_npugraph_skip_policy() -> None:
@@ -392,13 +780,27 @@ def apply_graph_compat_patches() -> None:
     for variable, patch in patches:
         if _enabled(variable):
             patch()
+    if _enabled("TORCHTITAN_PIPELINE_METADATA_FORCE_EAGER"):
+        _install_pipeline_metadata_force_eager()
+    if _enabled("TORCHTITAN_FIRST_ALL_REDUCE_HOST_BARRIER"):
+        _install_first_all_reduce_host_barrier()
     pipeline_batch = os.environ.get("TORCHTITAN_PIPELINE_META_USE_BATCH")
     if pipeline_batch not in (None, "0", "1"):
         raise ValueError(
             "TORCHTITAN_PIPELINE_META_USE_BATCH must be 0 or 1; "
             f"got {pipeline_batch!r}"
         )
-    if pipeline_batch == "0":
+    metadata_transport = os.environ.get(
+        "TORCHTITAN_PIPELINE_META_TRANSPORT", "hccl"
+    )
+    if metadata_transport not in {"hccl", "store"}:
+        raise ValueError(
+            "TORCHTITAN_PIPELINE_META_TRANSPORT must be 'hccl' or 'store'"
+        )
+    if metadata_transport == "store":
+        _install_pipeline_metadata_store_transport()
+    elif pipeline_batch == "0":
         _install_pipeline_metadata_p2p()
+    _install_pipeline_stage_precompile()
     _install_npugraph_skip_policy()
     _install_npugraph_capture_mode()
