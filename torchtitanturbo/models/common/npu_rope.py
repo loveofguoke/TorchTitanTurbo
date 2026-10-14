@@ -71,9 +71,11 @@ def _wrap_dtensor_like(
 
 def npu_apply_complex_rope(
     query: torch.Tensor,
-    key: torch.Tensor,
+    key: torch.Tensor | None,
     rope_cache: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    *,
+    inverse: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     """Apply token-first complex RoPE with the fused Ascend kernel."""
     from torch.distributed.tensor import DTensor
 
@@ -87,44 +89,58 @@ def npu_apply_complex_rope(
     # and sine duplicated for the adjacent even/odd feature pair.
     cos_1T1H = cache_local.real.repeat_interleave(2, dim=-1).unsqueeze(0)
     sin_1T1H = cache_local.imag.repeat_interleave(2, dim=-1).unsqueeze(0)
+    if inverse:
+        sin_1T1H = -sin_1T1H
     query_1TNH = query_local.float().unsqueeze(0)
-    key_1TMH = key_local.float().unsqueeze(0)
     query_out_TNH = torch_npu.npu_rotary_mul(
         query_1TNH,
         cos_1T1H,
         sin_1T1H,
         rotary_mode="interleave",
     ).squeeze(0)
+    query_out_TNH = query_out_TNH.type_as(query_local)
+    query_result = _wrap_dtensor_like(query_out_TNH, query)
+    if key_local is None:
+        return query_result
+    key_1TMH = key_local.float().unsqueeze(0)
     key_out_TMH = torch_npu.npu_rotary_mul(
         key_1TMH,
         cos_1T1H,
         sin_1T1H,
         rotary_mode="interleave",
     ).squeeze(0)
-    query_out_TNH = query_out_TNH.type_as(query_local)
     key_out_TMH = key_out_TMH.type_as(key_local)
     return (
-        _wrap_dtensor_like(query_out_TNH, query),
+        query_result,
         _wrap_dtensor_like(key_out_TMH, key),
     )
+
+
+def npu_reshape_complex_cache(self, query, positions=None):
+    """Gather a complex cache through supported real FP32 NPU tensors."""
+    cache = self.cache
+    num_tokens = query.shape[0]
+    if positions is None:
+        selected = cache[:num_tokens]
+    else:
+        selected = torch.complex(cache.real[positions], cache.imag[positions])
+    return selected.view(num_tokens, 1, cache.shape[-1])
 
 
 def _validate_torchtitan_rope_api() -> None:
     """Fail clearly when TorchTitan changes the RoPE patch contract."""
     from torchtitan.models.common import rope as rope_module
 
-    expected_reshape = ("rope_cache", "query_shape", "positions")
-    reshape_parameters = tuple(
-        inspect.signature(rope_module._reshape_for_broadcast).parameters
-    )
+    expected_reshape = ("self", "query", "positions")
+    reshape_parameters = tuple(inspect.signature(rope_module.ComplexRoPE._reshape_cache).parameters)
     if reshape_parameters != expected_reshape:
         raise RuntimeError(
-            "TorchTitan _reshape_for_broadcast API changed: expected "
+            "TorchTitan ComplexRoPE._reshape_cache API changed: expected "
             f"{expected_reshape}, got {reshape_parameters}. Update the NPU RoPE "
             "adapter before running training."
         )
 
-    expected_apply = ("query", "key", "rope_cache")
+    expected_apply = ("query", "key", "rope_cache", "inverse")
     apply_parameters = tuple(
         inspect.signature(rope_module.ComplexRoPE.apply_rotary_emb).parameters
     )
@@ -140,21 +156,7 @@ def apply_patch() -> None:
     """Patch TorchTitan's token-first RoPE cache selection for NPU."""
     from torchtitan.models.common.rope import ComplexRoPE
 
-    from torchtitanturbo.tools.patch_utils import replace_functions
-
     _validate_torchtitan_rope_api()
-    count = replace_functions(
-        "_reshape_for_broadcast",
-        npu_reshape_for_broadcast,
-        package="torchtitan",
-    )
-    if count == 0:
-        raise RuntimeError(
-            "TorchTitan _reshape_for_broadcast was not found; the NPU RoPE "
-            "adapter cannot be applied."
-        )
+    ComplexRoPE._reshape_cache = npu_reshape_complex_cache
     ComplexRoPE.apply_rotary_emb = staticmethod(npu_apply_complex_rope)
-    logger.info(
-        "Patched token-first RoPE cache selection in "
-        f"{count} module references and ComplexRoPE rotation"
-    )
+    logger.info("Patched ComplexRoPE cache selection and rotation for NPU")

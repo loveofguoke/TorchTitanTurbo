@@ -79,8 +79,12 @@ def apply_all_patches():
     # not partially install it against this API generation. GLM has a fully
     # migrated, independently validated patch and remains safe to install.
     if find_spec("torchtitan.distributed.compile") is None:
+        from torchtitanturbo.models.common.npu_rope import (
+            apply_patch as apply_rope_patch,
+        )
         from torchtitanturbo.models.glm5 import apply_glm5_patch
 
+        apply_rope_patch()
         apply_glm5_patch()
         logger.warning(
             "Detected config-first TorchTitan main: applied the migrated GLM "
