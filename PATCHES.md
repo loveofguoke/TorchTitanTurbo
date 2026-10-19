@@ -55,7 +55,8 @@ that shared infrastructure is installed before model-specific adapters.
 | 3 | `torchtitanturbo.tools.compile` | references to `torchtitan.distributed.compile.apply_compile` already imported by TorchTitan modules | Validate Ascend graph-backend restrictions, then delegate compilation to TorchTitan. |
 | 4 | `torchtitanturbo.models.common.npu_rope` | `torchtitan.models.common.rope._reshape_for_broadcast` references and `ComplexRoPE.apply_rotary_emb` | Avoid unsupported complex gather and use the fused Ascend rotary kernel while preserving token-first RoPE semantics. |
 | 5 | `torchtitanturbo.distributed.fsdp` | `torch.distributed.fsdp._fully_shard._fsdp_collectives._get_gradient_divide_factors` | Use SUM plus explicit division where NPU collectives cannot use the upstream AVG path. |
-| 6 | `torchtitanturbo.models.deepseek_v3.patch` | `DeepSeekV3ModelArgs.update_from_config` and registered DeepSeek configs | Apply the NPU-compatible attention/configuration policy. |
+| 6 | `torchtitanturbo.distributed.remat` | `torch_remat._placeholder._null_storage` | Preserve remat placeholder semantics with owning NPU storage because the current backend can segfault while releasing declared-size null-pointer storage. |
+| 7 | `torchtitanturbo.models.deepseek_v3.patch` | `DeepSeekV3ModelArgs.update_from_config` and registered DeepSeek configs | Apply the NPU-compatible attention/configuration policy. |
 | 7 | `torchtitanturbo.models.qwen3.patch` | `torchtitan.models.qwen3.infra.parallelize.apply_non_moe_tp` | Install the NPU-compatible Qwen3 non-MoE TP plan. |
 | 8 | `torchtitanturbo.models.glm5.patch` | GLM flavor parameter initializers and TorchTitan vocab-parallel CE | Fix NPU DTensor initialization and TP-loss paths without replacing current upstream Router semantics. |
 
@@ -186,6 +187,26 @@ equivalent to the upstream AVG path. This patch exists for collective/backend
 compatibility and does not define TorchTitan parallel topology.
 
 Implementation: `torchtitanturbo/distributed/fsdp.py`
+
+### torch_remat placeholder storage
+
+TorchTitan main now implements activation-checkpoint policies with
+`torch_remat`. During replay, an output of a saved region that is not needed is
+represented by a correctly shaped placeholder backed by a declared-size,
+null-pointer storage. PyTorch owns that protocol and still poisons data-pointer
+access so an accidental computation fails diagnostically.
+
+On the current Ascend stack, constructing the placeholder succeeds, but a real
+GLM backward can segfault while the NPU allocator/runtime releases that storage.
+Turbo changes only the storage provider for `device.type == "npu"`: it returns
+an owning byte storage of the same declared size. `torch_remat` continues to
+attach it to the placeholder, preserve its shape/stride/dtype, and poison data
+access. CPU and CUDA call the untouched upstream function. This is a bounded
+compatibility fallback with a temporary memory cost, not a second
+activation-checkpoint algorithm; it should be removed after the backend can
+safely own null-pointer placeholder storage.
+
+Implementation: `torchtitanturbo/distributed/remat.py`
 
 ### DeepSeek V3 configuration
 

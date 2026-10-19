@@ -8,10 +8,14 @@ the mathematical result ``sum(grad_r) / data_parallel_size`` unchanged while
 changing only how the backend performs the reduction.
 """
 
+import logging
+
 import torch
 import torch.distributed as dist
 from torch.distributed.distributed_c10d import ReduceOp
 from typing import Optional, Union
+
+logger = logging.getLogger(__name__)
 
 
 def _get_gradient_divide_factors(
@@ -70,8 +74,4 @@ def apply_patch():
     import torch.distributed.fsdp._fully_shard._fsdp_collectives
 
     torch.distributed.fsdp._fully_shard._fsdp_collectives._get_gradient_divide_factors = _get_gradient_divide_factors
-import logging
-
-logger = logging.getLogger(__name__)
-
     logger.info("Patched _get_gradient_divide_factors for NPU")

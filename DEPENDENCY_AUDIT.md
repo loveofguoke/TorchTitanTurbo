@@ -29,6 +29,7 @@ and `../torchtitan-test/DEPENDENCY_AUDIT.md`.
 | system optimization strategy prototypes | GraphTrainer AutoParallel, Async TP, FSDP/EP overlap and activation offload flags; Trainer FSDP CPU offload; DCP async modes | pure config translation and rejection tests; each selected strategy still requires its existing TorchTitan integration/numerics test and an Ascend profiler-off A/B |
 | NPU vocab-parallel loss | `components.loss._LossParallelCrossEntropy` | TP smoke, TP precision and backward comparison |
 | `graph_compat.py` and compile patches | TorchTitan model/parallel call graph, `PipelineStage._forward_metadata_inference`, plus torch_npu private APIs | graph debug, PP cold-start, graph smoke, eager-vs-graph precision/performance |
+| NPU remat placeholder storage | `torch_remat._placeholder._null_storage` and PyTorch storage data-pointer poisoning | selective-AC unit contract; GLM eager single/all smoke; memory comparison before formal runs |
 | profiler integration | Trainer profiler hooks and torch_npu profiler API, including stack and memory-timeline export contracts | performance probe, flamegraph/memory/all presets, offline analysis, and visualization report |
 | import-time patch bootstrap | all patch modules above | patch status/idempotency tests and one NPU import smoke test |
 

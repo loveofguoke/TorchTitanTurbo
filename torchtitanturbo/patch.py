@@ -82,8 +82,12 @@ def apply_all_patches():
         from torchtitanturbo.models.common.npu_rope import (
             apply_patch as apply_rope_patch,
         )
+        from torchtitanturbo.distributed.remat import (
+            apply_patch as apply_remat_patch,
+        )
         from torchtitanturbo.models.glm5 import apply_glm5_patch
 
+        apply_remat_patch()
         apply_rope_patch()
         apply_glm5_patch()
         logger.warning(
@@ -99,7 +103,7 @@ def apply_all_patches():
         apply_profiler_patch,
         apply_utils_patch,
     )
-    from torchtitanturbo.distributed import apply_fsdp_patch
+    from torchtitanturbo.distributed import apply_fsdp_patch, apply_remat_patch
     from torchtitanturbo.models.common import apply_rope_patch
     from torchtitanturbo.models import (
         apply_deepseek_patch,
@@ -114,6 +118,7 @@ def apply_all_patches():
     apply_profiler_patch()
     apply_compile_patch()
     apply_graph_compat_patches()
+    apply_remat_patch()
     apply_rope_patch()
     apply_fsdp_patch()
     apply_deepseek_patch()
