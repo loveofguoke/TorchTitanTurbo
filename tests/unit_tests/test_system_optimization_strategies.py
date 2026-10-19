@@ -30,7 +30,7 @@ def test_graph_strategy_translates_to_existing_torchtitan_flags():
         tp_schedule="async",
         fsdp_overlap="ag_rs",
         ep_overlap="enabled",
-        ep_overlap_module_fqn="layers.*.moe",
+        ep_overlap_module_fqn="layers.*.feed_forward",
         activation_memory="selective_recompute_and_cpu_offload",
         activation_cpu_budget_gb=24.0,
         state_offload="cpu",
@@ -122,7 +122,7 @@ def test_sequence_ep_overlap_requires_moe_scope():
         ep_overlap_module_fqn="layers.*",
     )
 
-    with pytest.raises(SystemStrategyError, match=r"layers\.\*\.moe"):
+    with pytest.raises(SystemStrategyError, match=r"layers\.\*\.feed_forward"):
         config.validate(expert_parallel_degree=2)
 
 

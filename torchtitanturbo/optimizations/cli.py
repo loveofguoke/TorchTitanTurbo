@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--ep-overlap-module-fqn",
-        choices=("layers.*", "layers.*.moe"),
+        choices=("layers.*", "layers.*.feed_forward"),
         default="layers.*",
     )
     parser.add_argument(

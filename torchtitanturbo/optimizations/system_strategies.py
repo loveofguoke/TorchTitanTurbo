@@ -44,7 +44,9 @@ class SystemOptimizationConfig:
     fsdp_overlap: FsdpOverlap = "default"
     ep_overlap: EpOverlap = "off"
     ep_overlap_chunk_dim: Literal["batch", "seq"] = "batch"
-    ep_overlap_module_fqn: Literal["layers.*", "layers.*.moe"] = "layers.*"
+    ep_overlap_module_fqn: Literal[
+        "layers.*", "layers.*.feed_forward"
+    ] = "layers.*"
     activation_memory: ActivationMemory = "unchanged"
     activation_cpu_budget_gb: float = 100.0
     activation_cpu_prefetch_layers: int = 1
@@ -108,10 +110,12 @@ class SystemOptimizationConfig:
             )
         if (
             self.ep_overlap_chunk_dim == "seq"
-            and self.ep_overlap_module_fqn != "layers.*.moe"
+            and self.ep_overlap_module_fqn != "layers.*.feed_forward"
         ):
             raise SystemStrategyError(
-                "Sequence EP overlap is only valid for layers.*.moe."
+                "Sequence EP overlap is only valid for "
+                "layers.*.feed_forward in the current TorchTitan graph "
+                "scheduler."
             )
         if self.activation_cpu_budget_gb <= 0:
             raise SystemStrategyError("activation_cpu_budget_gb must be positive.")
