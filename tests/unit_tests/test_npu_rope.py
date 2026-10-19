@@ -8,6 +8,7 @@ import torch
 from torchtitanturbo.models.common.npu_rope import (
     _validate_torchtitan_rope_api,
     npu_apply_complex_rope,
+    npu_reshape_complex_cache,
     npu_reshape_for_broadcast,
 )
 
@@ -35,6 +36,22 @@ class TestNpuRoPE(unittest.TestCase):
 
         self.assertEqual(actual_T1H.shape, (5, 1, 4))
         torch.testing.assert_close(actual_T1H, cache[:5].view(5, 1, 4))
+
+    def test_complex_rope_method_uses_official_query_shape_contract(self):
+        real = torch.arange(32, dtype=torch.float32).view(8, 4)
+        rope = type("Rope", (), {"cache": torch.complex(real, real + 100)})()
+        query_TNH = torch.randn(5, 3, 8)
+        positions_T = torch.tensor([0, 1, 2, 0, 1])
+
+        actual_T1H = npu_reshape_complex_cache(
+            rope,
+            query_TNH,
+            positions_T,
+        )
+
+        expected_T1H = rope.cache[positions_T].view(5, 1, 4)
+        self.assertEqual(actual_T1H.shape, (5, 1, 4))
+        torch.testing.assert_close(actual_T1H, expected_T1H)
 
     @patch("torch_npu.npu_rotary_mul")
     def test_fused_complex_rope_matches_torchtitan_math(self, rotary_mul):

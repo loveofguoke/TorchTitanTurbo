@@ -117,14 +117,24 @@ def npu_apply_complex_rope(
 
 
 def npu_reshape_complex_cache(self, query, positions=None):
-    """Gather a complex cache through supported real FP32 NPU tensors."""
-    cache = self.cache
-    num_tokens = query.shape[0]
-    if positions is None:
-        selected = cache[:num_tokens]
-    else:
-        selected = torch.complex(cache.real[positions], cache.imag[positions])
-    return selected.view(num_tokens, 1, cache.shape[-1])
+    """Gather a complex cache through the official SPMD reshape contract.
+
+    ``ComplexRoPE._reshape_cache`` must not index the global cache directly:
+    under TP/CP its query and position tensors may be DTensors.  Delegate to
+    the NPU-safe ``local_map`` equivalent of TorchTitan's
+    ``_reshape_for_broadcast`` so inputs are localized and the replicated
+    cache DTensor is reconstructed with the official placements.
+    """
+    from torchtitan.models.common.rope import _maybe_check_max_pos
+
+    if positions is not None:
+        _maybe_check_max_pos(positions, max_valid_pos=self.cache.shape[0] - 1)
+    complex_query_shape = (*query.shape[:-1], query.shape[-1] // 2)
+    return npu_reshape_for_broadcast(
+        self.cache,
+        complex_query_shape,
+        positions,
+    )
 
 
 def _validate_torchtitan_rope_api() -> None:
