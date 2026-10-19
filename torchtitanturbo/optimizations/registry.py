@@ -18,7 +18,22 @@ DsaTopKBackend = Literal["torch", "deepselect"]
 MoeTopKBackend = Literal["torch", "tilekernels"]
 MoeGemmBackend = Literal["torch", "deepgemm_ascend"]
 EpDispatchBackend = Literal["torchao", "deepep_ascend"]
-SparseAttentionBackend = Literal["flex_attention", "flashmla_ascend"]
+SparseAttentionBackend = Literal[
+    "flex_attention",
+    "flashmla_ascend",
+    "triton_dsa_training",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class OverrideProviderSelection:
+    """A provider selected through TorchTitan's explicit override mechanism."""
+
+    name: str
+    override_import: str
+    training_forward: bool
+    training_backward: bool
+    runtime_accepted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +67,7 @@ class OptimizationProvidersConfig:
             "sparse_attention_backend": {
                 "flex_attention",
                 "flashmla_ascend",
+                "triton_dsa_training",
             },
         }
         for field_name, valid_values in allowed.items():
@@ -75,6 +91,16 @@ class OptimizationProvidersConfig:
             providers["ep_dispatch"] = DeepEpAscendBufferProvider()
         if self.sparse_attention_backend == "flashmla_ascend":
             providers["sparse_attention"] = FlashMlaAscendSparseProvider()
+        elif self.sparse_attention_backend == "triton_dsa_training":
+            providers["sparse_attention"] = OverrideProviderSelection(
+                name="triton_dsa_training",
+                override_import=(
+                    "torchtitanturbo.models.glm5.ops.triton_dsa."
+                    "triton_dsa_training"
+                ),
+                training_forward=True,
+                training_backward=True,
+            )
         return providers
 
     def selected_names(self) -> dict[str, str]:
@@ -102,6 +128,7 @@ class OptimizationProvidersConfig:
             ("moe_gemm", "deepgemm_ascend"): "deep_gemm",
             ("ep_dispatch", "deepep_ascend"): "deep_ep",
             ("sparse_attention", "flashmla_ascend"): "flash_mla",
+            ("sparse_attention", "triton_dsa_training"): "triton",
         }
         capabilities: list[ProviderPackageCapability] = []
         for seam, backend in self.selected_names().items():

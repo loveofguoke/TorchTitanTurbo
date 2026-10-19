@@ -31,6 +31,7 @@ from .tilekernels import (
 from .registry import (
     OptimizationExperimentConfig,
     OptimizationProvidersConfig,
+    OverrideProviderSelection,
     ProviderPackageCapability,
 )
 from .system_strategies import SystemOptimizationConfig, SystemStrategyError
@@ -56,6 +57,7 @@ __all__ = [
     "validate_tilekernels_topk_request",
     "OptimizationProvidersConfig",
     "OptimizationExperimentConfig",
+    "OverrideProviderSelection",
     "ProviderPackageCapability",
     "SystemOptimizationConfig",
     "SystemStrategyError",

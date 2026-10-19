@@ -102,6 +102,21 @@ API naming alone is not compatibility evidence.
 
 Official source: [deepseek-ai/FlashMLA](https://github.com/deepseek-ai/FlashMLA).
 
+## GLM DSA Triton training prototype
+
+`sparse_attention_backend="triton_dsa_training"` records the explicit
+TorchTitan override
+`torchtitanturbo.models.glm5.ops.triton_dsa.triton_dsa_training`. Unlike the
+FlashMLA Ascend provider, this prototype contains paired forward and backward
+kernels for the current expanded GLM Q/K/V contract. The registry reports both
+directions as present but keeps `runtime_accepted=false`: registration is not
+CUDA or NPU acceptance evidence.
+
+The override is exact to non-CP `Glm5FlexAttention.Config`. It does not replace
+the CP all-gather implementation, does not activate on import, and has no dense
+or FlexAttention fallback. See `models/glm5/DSA.md` for the math, SPMD boundary,
+and required numerical/performance gates.
+
 ## DeepEP-Ascend EPBuffer
 
 `DeepEpAscendBufferProvider` builds an explicitly destroyed `EPBuffer` with

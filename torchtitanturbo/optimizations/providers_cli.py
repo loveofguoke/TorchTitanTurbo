@@ -29,7 +29,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--sparse-attention-backend",
-        choices=("flex_attention", "flashmla_ascend"),
+        choices=(
+            "flex_attention",
+            "flashmla_ascend",
+            "triton_dsa_training",
+        ),
         default="flex_attention",
     )
     return parser
