@@ -64,6 +64,15 @@ Legacy bootstrap selection supports only explicit `none`; subset claims apply
 only to the config-first branch. Existing graph/profiler converters are not
 activated by this selector and are outside an eager-only removal verdict.
 
+`inductor_scheduler` is a separate, **default-off** compatibility experiment for
+the observed Torch 2.15/TorchNPU build whose NPU scheduler inherits NVIDIA GEMM
+hooks without constructing the NVIDIA scheduler. It delegates reduction hooks
+to generic Inductor policies and preserves TorchNPU Welford priorities, without
+changing CUDA classes or adding dummy NVIDIA objects. It is not included by
+`all` or by the default. When held constant across legacy-patch A/B endpoints,
+the legacy-free side must be reported as `inductor_scheduler`, not patch-free.
+Remove this bridge once TorchNPU provides the corresponding hooks.
+
 `apply_all_patches()` applies patches in this order. The order is explicit so
 that shared infrastructure is installed before model-specific adapters.
 

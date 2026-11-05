@@ -19,6 +19,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 _CONFIG_FIRST_PATCHES = ("remat", "rope", "glm_init", "glm_loss")
+_EXPERIMENTAL_PATCHES = ("inductor_scheduler",)
 _PATCH_STATUS = {}
 
 
@@ -28,10 +29,11 @@ def _select_config_first_patches(raw: str | None) -> tuple[str, ...]:
     if raw == "none":
         return ()
     names = raw.split(",")
-    unknown = set(names) - set(_CONFIG_FIRST_PATCHES)
+    valid = _EXPERIMENTAL_PATCHES + _CONFIG_FIRST_PATCHES
+    unknown = set(names) - set(valid)
     if unknown:
         raise ValueError(f"Unknown Turbo patch names: {sorted(unknown)}")
-    return tuple(name for name in _CONFIG_FIRST_PATCHES if name in names)
+    return tuple(name for name in valid if name in names)
 
 
 def get_patch_status() -> dict:
@@ -114,6 +116,13 @@ def apply_all_patches():
         from torchtitanturbo.models.glm5 import apply_glm5_patch
 
         applied = []
+        if "inductor_scheduler" in selected:
+            from torchtitanturbo.tools.inductor_scheduler import apply_patch
+
+            if apply_patch():
+                applied.append("inductor_scheduler")
+            else:
+                _PATCH_STATUS["not_required"] = ("inductor_scheduler",)
         if "remat" in selected:
             apply_remat_patch()
             applied.append("remat")
