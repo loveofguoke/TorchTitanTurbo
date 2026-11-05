@@ -97,3 +97,17 @@ and `tests/unit_tests/test_glm5_dsa_contract.py`. NPU execution is not yet verif
 
 Other model forks are independent review scopes. A GLM change must not
 opportunistically rewrite Qwen, DeepSeek, or Llama patches.
+## Gathered GLM attention migration
+
+TorchTitan `78994ad9a` changes the default GLM inner backend to selected-key
+Attention Gym gather. Its portable reference is a correctness implementation,
+not the NPU training backend. `NpuGlm5FlexTransform` explicitly replaces the
+completed trainer model's exact sparse-backend configs through public config
+transforms. Consumers are `torchtitan-test/tests/glm5_ascend040/worker.py`
+(`GLM_NPU_FLEX=1`) and `tests/unit_tests/test_glm5_dsa_contract.py`. Validate
+config/parameter preservation, pointwise mask membership, NPU Q/K/V gradients,
+and TP/CP/remat training before marking this source baseline accepted.
+
+The older optional `ops/triton_dsa.py` prototype still targets the superseded
+dense-mask/override API and is not a supported consumer of this baseline.
+Do not select it or equate its provider registration with runtime acceptance.

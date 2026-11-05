@@ -278,6 +278,17 @@ Implementation: `torchtitanturbo/models/qwen3/patch.py`
 
 ### GLM-5 compatibility patch group
 
+Current gathered-attention GLM configs can explicitly select
+`torchtitanturbo.models.glm5.attention.NpuGlm5FlexTransform` through TorchTitan's
+public `apply_transforms(trainer_config, [...])` API. This transform replaces
+only exact GLM sparse-attention configs, including CP/MTP nested backends, with
+the NPU Flex adapter. It preserves parameters and compact-KV communication;
+the mask callback performs pointwise binary-search membership rather than a
+reduction, which TorchNPU's Flex subgraph cannot lower. It is not installed by
+Turbo import, not an implicit device fallback, and not a claim of gathered
+compute sparsity. Old TorchTitan revisions that already construct Flex configs
+do not use this transform.
+
 For the FlexAttention DSA test branch, see
 [DSA compatibility audit](torchtitanturbo/models/glm5/DSA.md).
 No new runtime patch is installed for DSA; the added tests check that existing
