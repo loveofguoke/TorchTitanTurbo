@@ -48,7 +48,8 @@ def build_dsa_block_mask(indices_QS, metadata: DsaMetadata, block_size=128):
         lower = (q + k) * 0
         upper = lower + S
         for _ in range(S.bit_length()):
-            middle = (lower + upper) // 2
+            # Non-negative bounds: avoid DVM's non-pointwise floor-div fallback.
+            middle = (lower + upper) >> 1
             before = selected_QS[row, middle.clamp(max=S - 1)] < k
             lower = torch.where(before, middle + 1, lower)
             upper = torch.where(before, upper, middle)

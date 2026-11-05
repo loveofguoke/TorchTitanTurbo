@@ -77,7 +77,10 @@ class TestGlm5DsaContract(unittest.TestCase):
 
         graph = make_fx(mask.mask_mod)(torch.tensor(0), torch.tensor(0), q, k)
         self.assertFalse(
-            any(node.target == torch.ops.aten.any.dim for node in graph.graph.nodes)
+            any(
+                node.target in (torch.ops.aten.any.dim, torch.ops.aten.div.Tensor_mode)
+                for node in graph.graph.nodes
+            )
         )
 
     @unittest.skipUnless(
