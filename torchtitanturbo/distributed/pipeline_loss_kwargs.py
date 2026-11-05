@@ -13,12 +13,17 @@ def _wrap_step(original):
     def step(self, *args, loss_kwarg_mbs=None, **kwargs):
         if loss_kwarg_mbs is None:
             return original(self, *args, **kwargs)
-        if "loss_kwargs" in kwargs:
-            raise ValueError("Use loss_kwarg_mbs, not both loss keyword contracts")
         if len(loss_kwarg_mbs) != self._n_microbatches or not all(
             isinstance(value, dict) for value in loss_kwarg_mbs
         ):
             raise ValueError("loss_kwarg_mbs requires one dict per microbatch")
+        common = kwargs.pop("loss_kwargs", None)
+        if common is not None:
+            if not isinstance(common, dict):
+                raise ValueError("loss_kwargs must be a dict")
+            if any(common.keys() & value.keys() for value in loss_kwarg_mbs):
+                raise ValueError("Common and microbatch loss kwargs must not overlap")
+            loss_kwarg_mbs = [{**common, **value} for value in loss_kwarg_mbs]
         previous = getattr(self, "_turbo_loss_kwarg_mbs", None)
         self._turbo_loss_kwarg_mbs = loss_kwarg_mbs
         try:

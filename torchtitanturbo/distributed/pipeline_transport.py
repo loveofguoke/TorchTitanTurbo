@@ -13,9 +13,13 @@ from torchtitan.distributed import utils
 logger = logging.getLogger(__name__)
 
 
-def _configure_transport(device, backend):
+def _configure_transport(device, backend, *, use_torchcomms):
     if device.type != "npu" or backend.supports_splitting:
         return False
+    if use_torchcomms:
+        raise ValueError(
+            "Ordinary NPU PP transport cannot override TorchComms per-edge mode"
+        )
     dist_config.pipeline_per_edge_p2p = False
     logger.warning(
         "NPU backend lacks split_group; using the ordinary shared PP communicator"
@@ -41,7 +45,11 @@ def apply_patch():
             device = utils.get_local_device()
             if device.type == "npu":
                 backend = dist.group.WORLD._get_backend(device)
-                _configure_transport(device, backend)
+                _configure_transport(
+                    device,
+                    backend,
+                    use_torchcomms=dist.distributed_c10d._use_torchcomms_enabled(),
+                )
         return result
 
     initialize._turbo_pipeline_transport = True

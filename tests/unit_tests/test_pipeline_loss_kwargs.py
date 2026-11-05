@@ -12,7 +12,9 @@ class Schedule:
     def _maybe_compute_loss(
         self, stage, output, target_mbs, mb_index, loss_kwargs=None
     ):
-        value = output.square() / loss_kwargs["denominator"]
+        value = (
+            output.square() / loss_kwargs["denominator"] * loss_kwargs.get("scale", 1)
+        )
         loss_kwargs["loss_metrics"]["value"] = value.detach()
         return value
 
@@ -59,3 +61,19 @@ def test_failure_restores_schedule_and_rejects_incomplete_kwargs():
     assert not hasattr(schedule, "_turbo_loss_kwarg_mbs")
     with pytest.raises(ValueError, match="one dict"):
         schedule.step(torch.ones(2), loss_kwarg_mbs=[{}])
+
+
+def test_common_kwargs_merge_without_reusing_microbatch_metrics():
+    kwargs = [{"denominator": 1, "loss_metrics": {}} for _ in range(2)]
+    result = Schedule().step(
+        torch.tensor([2.0, 3.0]),
+        loss_kwargs={"scale": 2},
+        loss_kwarg_mbs=kwargs,
+    )
+    assert result == 26
+    assert kwargs[0]["loss_metrics"]["value"] == 8
+    assert kwargs[1]["loss_metrics"]["value"] == 18
+    with pytest.raises(ValueError, match="overlap"):
+        Schedule().step(
+            torch.ones(2), loss_kwargs={"denominator": 1}, loss_kwarg_mbs=kwargs
+        )
