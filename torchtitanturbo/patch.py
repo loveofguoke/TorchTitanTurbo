@@ -24,6 +24,7 @@ _EXPERIMENTAL_PATCHES = (
     "inductor_reduction",
     "pipeline_cleanup",
     "pipeline_loss_kwargs",
+    "pipeline_transport",
 )
 _PATCH_STATUS = {}
 
@@ -143,6 +144,11 @@ def apply_all_patches():
 
             if apply_patch():
                 applied.append("pipeline_loss_kwargs")
+        if "pipeline_transport" in selected:
+            from torchtitanturbo.distributed.pipeline_transport import apply_patch
+
+            if apply_patch():
+                applied.append("pipeline_transport")
         if "remat" in selected:
             apply_remat_patch()
             applied.append("remat")
