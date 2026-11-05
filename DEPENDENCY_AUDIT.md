@@ -32,6 +32,7 @@ and `../torchtitan-test/DEPENDENCY_AUDIT.md`.
 | NPU remat placeholder storage | `torch_remat._placeholder._null_storage` and PyTorch storage data-pointer poisoning | selective-AC unit contract; GLM eager single/all smoke; memory comparison before formal runs |
 | profiler integration | Trainer profiler hooks and torch_npu profiler API, including stack and memory-timeline export contracts | performance probe, flamegraph/memory/all presets, offline analysis, and visualization report |
 | import-time patch bootstrap | all patch modules above | patch status/idempotency tests and one NPU import smoke test |
+| opt-in `inductor_scheduler` | installed `NPUCombinedScheduling` inherited reduction-pair, epilogue and fusion-priority hooks; PyTorch `BaseScheduling` generic policies | NPU-only class/idempotency and Welford-priority tests; same-fixture FlexAttention training with the adapter held constant across legacy-patch A/B |
 
 TorchTitan `ad17686a` removed the repository-local
 `Linear(..., compute_dtype=...)` extension while retaining an autocast-based
@@ -63,6 +64,11 @@ must stay aligned. The Ascend 0.4.0 fused-model suite and Turbo + latest
 TorchTitan FlexAttention suite are distinct evidence generations; never promote
 a patch-removal conclusion from one to the other. Native component checks and
 same-fixture training are required before removing an active default.
+
+The default-off scheduler bridge addresses an observed Torch 2.15/TorchNPU
+interface mismatch, not a GLM algorithm. Its presence must be recorded even on
+the legacy-free endpoint. Native-op acceptance does not validate Inductor
+code generation; complete forward/backward remains a separate requirement.
 
 GLM DSA test-branch audit against TorchTitan `8ac999e8`: sparse attention and
 index sharing remain upstream-owned. See `torchtitanturbo/models/glm5/DSA.md`
