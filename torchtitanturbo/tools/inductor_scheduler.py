@@ -31,6 +31,7 @@ def apply_patch() -> bool:
     from torch_npu._inductor.codegen.npu_combined_scheduling import (
         NPUCombinedScheduling,
     )
+    from torch_npu._inductor.codegen.scheduling import NPUTritonScheduling
 
     cls = NPUCombinedScheduling
     marker = "_torchtitanturbo_npu_scheduler_hooks"
@@ -59,5 +60,14 @@ def apply_patch() -> bool:
     ):
         cls.can_fuse_reduction_epilogue = BaseScheduling.can_fuse_reduction_epilogue
     cls.get_fusion_pair_priority = _fusion_pair_priority
+    # The NPU emitter uses nested iteration groups and has no staged epilogue
+    # emitter. Do not inherit CUDA's flat-domain sub-parent planning protocol.
+    for scheduling in (cls, NPUTritonScheduling):
+        if tuple(inspect.signature(scheduling.has_sub_parent_epilogue).parameters) != (
+            "self",
+            "nodes",
+        ):
+            raise RuntimeError("Unsupported sub-parent scheduler hook")
+        scheduling.has_sub_parent_epilogue = BaseScheduling.has_sub_parent_epilogue
     setattr(cls, marker, True)
     return True

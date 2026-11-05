@@ -72,6 +72,9 @@ code generation; complete forward/backward remains a separate requirement.
 The independently selected `inductor_reduction` bridge accepts only the new
 `strict_reduction=False` keyword and delegates to the unchanged NPU factory.
 `True` fails explicitly. Both bridges remain outside the default patch set.
+Audit inherited `has_sub_parent_epilogue` as well: CUDA's flat-group planner is
+not compatible with the observed NPU nested-group emitter. A2 and A5 null-storage
+safety must be validated with actual multi-rank replay, not single-rank success.
 
 GLM DSA test-branch audit against TorchTitan `8ac999e8`: sparse attention and
 index sharing remain upstream-owned. See `torchtitanturbo/models/glm5/DSA.md`

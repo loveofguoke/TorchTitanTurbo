@@ -50,6 +50,12 @@ def test_adapter_is_idempotent_and_does_not_change_cuda_class():
     scheduler = NPUCombinedScheduling.__new__(NPUCombinedScheduling)
     assert scheduler.can_fuse_reduction_pair(object(), object())
     assert not scheduler.can_fuse_reduction_epilogue(object(), object())
+    assert not scheduler.has_sub_parent_epilogue([object()])
+    from torch_npu._inductor.codegen.scheduling import NPUTritonScheduling
+
+    assert not NPUTritonScheduling.__new__(NPUTritonScheduling).has_sub_parent_epilogue(
+        [object()]
+    )
     assert CUDACombinedScheduling.can_fuse_reduction_pair is original
 
 

@@ -72,6 +72,11 @@ changing CUDA classes or adding dummy NVIDIA objects. It is not included by
 `all` or by the default. When held constant across legacy-patch A/B endpoints,
 the legacy-free side must be reported as `inductor_scheduler`, not patch-free.
 Remove this bridge once TorchNPU provides the corresponding hooks.
+The observed CP lowering also reaches CUDA's inherited sub-parent epilogue
+planner with NPU nested iteration groups, causing `SympifyError` on a list.
+The bridge uses the generic `False` capability query on the NPU combined and
+Triton schedulers: this NPU emitter has no staged sub-parent implementation.
+It does not disable remat or modify CUDA's scheduler.
 
 `inductor_reduction` is a separate default-off signature bridge for the same
 installed stack: PyTorch `sum_` passes `strict_reduction=False` to TorchNPU's
