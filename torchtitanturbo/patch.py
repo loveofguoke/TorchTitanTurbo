@@ -19,7 +19,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 _CONFIG_FIRST_PATCHES = ("remat", "rope", "glm_init", "glm_loss")
-_EXPERIMENTAL_PATCHES = ("inductor_scheduler",)
+_EXPERIMENTAL_PATCHES = ("inductor_scheduler", "inductor_reduction")
 _PATCH_STATUS = {}
 
 
@@ -116,6 +116,11 @@ def apply_all_patches():
         from torchtitanturbo.models.glm5 import apply_glm5_patch
 
         applied = []
+        if "inductor_reduction" in selected:
+            from torchtitanturbo.tools.inductor_reduction import apply_patch
+
+            if apply_patch():
+                applied.append("inductor_reduction")
         if "inductor_scheduler" in selected:
             from torchtitanturbo.tools.inductor_scheduler import apply_patch
 

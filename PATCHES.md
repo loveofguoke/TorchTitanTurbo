@@ -73,6 +73,13 @@ changing CUDA classes or adding dummy NVIDIA objects. It is not included by
 the legacy-free side must be reported as `inductor_scheduler`, not patch-free.
 Remove this bridge once TorchNPU provides the corresponding hooks.
 
+`inductor_reduction` is a separate default-off signature bridge for the same
+installed stack: PyTorch `sum_` passes `strict_reduction=False` to TorchNPU's
+older factory. It delegates unchanged to that NPU factory and explicitly rejects
+`True`; no strict-ordering request is silently discarded. The observed upstream
+eligibility check requires a CUDA input, so this does not enable strict ordering
+on NPU. A fixed factory accepting the keyword needs no bridge.
+
 `apply_all_patches()` applies patches in this order. The order is explicit so
 that shared infrastructure is installed before model-specific adapters.
 

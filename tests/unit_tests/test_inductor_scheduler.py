@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import pytest
+
 from torchtitanturbo.tools.inductor_scheduler import _fusion_pair_priority, apply_patch
 
 
@@ -49,3 +51,28 @@ def test_adapter_is_idempotent_and_does_not_change_cuda_class():
     assert scheduler.can_fuse_reduction_pair(object(), object())
     assert not scheduler.can_fuse_reduction_epilogue(object(), object())
     assert CUDACombinedScheduling.can_fuse_reduction_pair is original
+
+
+def test_reduction_bridge_preserves_native_factory_and_rejects_strict():
+    from torch._inductor import lowering
+    from torch_npu._inductor import lowering as npu_lowering
+    from torchtitanturbo.tools.inductor_reduction import apply_patch as apply_reduction
+
+    native = Mock(return_value=object())
+
+    def factory(reduction_type, override_return_dtype=None):
+        return native(reduction_type, override_return_dtype=override_return_dtype)
+
+    with patch.object(lowering, "make_reduction", factory), patch.object(
+        npu_lowering, "make_reduction", factory
+    ):
+        assert apply_reduction()
+        assert apply_reduction()
+        result = lowering.make_reduction(
+            "sum", override_return_dtype="dtype", strict_reduction=False
+        )
+        assert result is native.return_value
+        native.assert_called_once_with("sum", override_return_dtype="dtype")
+        with pytest.raises(NotImplementedError, match="strict reduction"):
+            lowering.make_reduction("sum", strict_reduction=True)
+        assert native.call_count == 1
