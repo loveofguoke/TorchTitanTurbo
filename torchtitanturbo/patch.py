@@ -19,7 +19,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 _CONFIG_FIRST_PATCHES = ("remat", "rope", "glm_init", "glm_loss")
-_EXPERIMENTAL_PATCHES = ("inductor_scheduler", "inductor_reduction")
+_EXPERIMENTAL_PATCHES = ("inductor_scheduler", "inductor_reduction", "pipeline_cleanup")
 _PATCH_STATUS = {}
 
 
@@ -128,6 +128,11 @@ def apply_all_patches():
 
             if apply_patch():
                 applied.append("inductor_reduction")
+        if "pipeline_cleanup" in selected:
+            from torchtitanturbo.distributed.pipeline_cleanup import apply_patch
+
+            if apply_patch():
+                applied.append("pipeline_cleanup")
         if "remat" in selected:
             apply_remat_patch()
             applied.append("remat")
