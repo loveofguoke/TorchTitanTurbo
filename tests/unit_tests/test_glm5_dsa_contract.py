@@ -39,7 +39,8 @@ class TestGlm5DsaContract(unittest.TestCase):
                 Glm5SparseAttention.Config,
             )
             self.assertEqual(
-                patched.attention.inner_attention, original.attention.inner_attention
+                patched.attention.inner_attention.inner_attention,
+                original.attention.inner_attention.inner_attention,
             )
             if patched.attention.indexer is not None:
                 self.assertEqual(
