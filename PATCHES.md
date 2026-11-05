@@ -230,6 +230,25 @@ Implementation: `torchtitanturbo/distributed/fsdp.py`
 
 ### torch_remat placeholder storage
 
+The opt-in `pipeline_cleanup`, `pipeline_loss_kwargs`, and `pipeline_transport`
+groups address separately observed ordinary-Trainer PP failures on the A5
+Torch2.15 wheel. They are not enabled by default:
+
+- Cleanup backports the missing removable callback API at the existing last
+  local dynamic-stage cleanup boundary. Static metadata and P2P failures before
+  metadata backup do not invoke the callbacks.
+- Loss kwargs preserve distinct per-microbatch normalization and mutable metrics
+  dictionaries, including non-overlapping common kwargs; they do not drop the
+  new argument or reuse MB0's dict for actual loss calls.
+- Transport checks the NPU backend's `supports_splitting` capability after the
+  original distributed init. Unsupported HCCL uses PyTorch's existing shared PP
+  communicator; supported backends stay unchanged, and incompatible TorchComms
+  selection raises. This does not establish captured GraphTrainer PP support.
+
+The API bridges skip newer native implementations. None changes recomputation,
+loss math, gradient scaling, or the installed Torch/TorchNPU package. Scope is
+the tested wheel/API combination, not a general Ascend950 hardware limitation.
+
 TorchTitan main now implements activation-checkpoint policies with
 `torch_remat`. During replay, an output of a saved region that is not needed is
 represented by a correctly shaped placeholder backed by a declared-size,
