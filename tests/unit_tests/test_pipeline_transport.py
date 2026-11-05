@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import torchtitanturbo.distributed.pipeline_transport as transport
 
 from torchtitanturbo.distributed.pipeline_transport import _configure_transport
 
@@ -33,3 +34,48 @@ def test_torchcomms_cannot_be_silently_forced_to_ordinary_transport():
             SimpleNamespace(supports_splitting=False),
             use_torchcomms=True,
         )
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_wrapper_queries_backend_only_after_original_initialization(
+    monkeypatch, degree
+):
+    events = []
+    result = object()
+    config = SimpleNamespace(pipeline_per_edge_p2p=True)
+
+    def initialize(**kwargs):
+        events.append("init")
+        assert kwargs["pipeline_parallel_degree"] == degree
+        return result
+
+    def device():
+        assert events == ["init"]
+        events.append("device")
+        return SimpleNamespace(type="npu")
+
+    def backend(device):
+        assert events == ["init", "device"]
+        assert device.type == "npu"
+        events.append("backend")
+        return SimpleNamespace(supports_splitting=False)
+
+    monkeypatch.setattr(transport.utils, "init_distributed", initialize)
+    monkeypatch.setattr(transport.utils, "get_local_device", device)
+    monkeypatch.setattr(transport.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(
+        transport.dist,
+        "group",
+        SimpleNamespace(WORLD=SimpleNamespace(_get_backend=backend)),
+    )
+    monkeypatch.setattr(
+        transport.dist.distributed_c10d, "_use_torchcomms_enabled", lambda: False
+    )
+    monkeypatch.setattr(transport, "dist_config", config)
+    transport.apply_patch()
+    wrapped = transport.utils.init_distributed
+    transport.apply_patch()
+    assert transport.utils.init_distributed is wrapped
+    assert wrapped(pipeline_parallel_degree=degree) is result
+    assert events == (["init"] if degree == 1 else ["init", "device", "backend"])
+    assert config.pipeline_per_edge_p2p is (degree == 1)
