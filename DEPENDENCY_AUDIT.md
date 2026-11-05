@@ -56,6 +56,14 @@ the failure and upstream handoff are recorded as G020 in torchtitan-test.
 
 ## Mandatory audit after changes
 
+The config-first bootstrap now exposes `TORCHTITAN_TURBO_PATCHES` for fresh-
+process A5 compatibility A/B. Defaults are unchanged. Bootstrap selection,
+independent GLM initializer/loss activation and the test-side runtime selector
+must stay aligned. The Ascend 0.4.0 fused-model suite and Turbo + latest
+TorchTitan FlexAttention suite are distinct evidence generations; never promote
+a patch-removal conclusion from one to the other. Native component checks and
+same-fixture training are required before removing an active default.
+
 GLM DSA test-branch audit against TorchTitan `8ac999e8`: sparse attention and
 index sharing remain upstream-owned. See `torchtitanturbo/models/glm5/DSA.md`
 and `tests/unit_tests/test_glm5_dsa_contract.py`. NPU execution is not yet verified.

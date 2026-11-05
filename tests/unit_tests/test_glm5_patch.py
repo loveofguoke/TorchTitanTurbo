@@ -2,6 +2,7 @@
 
 import unittest
 from functools import partial
+from unittest.mock import patch
 
 import torch
 
@@ -40,14 +41,12 @@ class TestGlm5Patch(unittest.TestCase):
             parallelism=ParallelismConfig(),
             seq_len=128,
         )
-        linear_initializer = model_config.layers[0].attention.wq_a.param_init[
-            "weight"
-        ]
+        linear_initializer = model_config.layers[0].attention.wq_a.param_init["weight"]
         self.assertIsInstance(linear_initializer, partial)
         self.assertIs(linear_initializer.func, _npu_safe_trunc_normal_)
-        expert_initializer = model_config.layers[1].moe.routed_experts.w13.param_init[
-            "weight"
-        ]
+        expert_initializer = model_config.layers[
+            1
+        ].feed_forward.routed_experts.w13.param_init["weight"]
         self.assertIsNotNone(expert_initializer)
         self.assertIs(
             loss_module._LossParallelCrossEntropy.forward,
@@ -57,6 +56,34 @@ class TestGlm5Patch(unittest.TestCase):
             loss_module._LossParallelCrossEntropy.backward,
             glm5_patch._npu_safe_loss_parallel_backward,
         )
+
+    def test_init_and_loss_can_be_selected_independently(self):
+        from torchtitanturbo.models.glm5 import patch as glm5_patch
+
+        with (
+            patch.object(glm5_patch, "_patch_vocab_parallel_loss") as loss,
+            patch.object(glm5_patch, "_patch_glm5_param_initializers") as init,
+        ):
+            glm5_patch.apply_patch(initialization=False, loss=True)
+            loss.assert_called_once()
+            init.assert_not_called()
+            loss.reset_mock()
+            glm5_patch.apply_patch(initialization=False, loss=False)
+            loss.assert_not_called()
+            init.assert_not_called()
+
+    def test_bootstrap_selector_rejects_unknown_patch_names(self):
+        from torchtitanturbo.patch import _select_config_first_patches
+
+        self.assertEqual(_select_config_first_patches("none"), ())
+        self.assertEqual(
+            _select_config_first_patches("glm_loss,rope"), ("rope", "glm_loss")
+        )
+        self.assertEqual(
+            _select_config_first_patches(None), _select_config_first_patches("all")
+        )
+        with self.assertRaises(ValueError):
+            _select_config_first_patches("roep")
 
 
 if __name__ == "__main__":

@@ -45,6 +45,25 @@ patches of TorchTitan objects.
 
 ## Current patch application order
 
+### Process-isolated A5 patch A/B
+
+On config-first TorchTitan, `TORCHTITAN_TURBO_PATCHES` explicitly selects the
+migrated compatibility groups: `remat`, `rope`, `glm_init`, `glm_loss`.
+Unset or `all` preserves the existing default; `none` imports Turbo without
+installing these code patches. Runtime environment policy stays the same on
+both sides. A comma-separated subset supports one-factor removal experiments.
+Unknown names fail; changing an installed selection requires a fresh process.
+`torchtitanturbo.patch.get_patch_status()` records selection and applied groups.
+
+This is an experiment control, not automatic A5 removal. Native init sampling,
+TP CE outputs/gradients, RoPE outputs/gradients, selective/full remat and real
+distributed training must be checked on the exact A5 stack before changing
+defaults. Initialization variants can produce different seeded weights; compare
+training only after loading the same fixture, not from different initializers.
+Legacy bootstrap selection supports only explicit `none`; subset claims apply
+only to the config-first branch. Existing graph/profiler converters are not
+activated by this selector and are outside an eager-only removal verdict.
+
 `apply_all_patches()` applies patches in this order. The order is explicit so
 that shared infrastructure is installed before model-specific adapters.
 

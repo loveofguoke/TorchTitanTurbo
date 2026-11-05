@@ -18,6 +18,26 @@ import torch
 
 logger = logging.getLogger(__name__)
 
+_CONFIG_FIRST_PATCHES = ("remat", "rope", "glm_init", "glm_loss")
+_PATCH_STATUS = {}
+
+
+def _select_config_first_patches(raw: str | None) -> tuple[str, ...]:
+    if raw is None or raw == "all":
+        return _CONFIG_FIRST_PATCHES
+    if raw == "none":
+        return ()
+    names = raw.split(",")
+    unknown = set(names) - set(_CONFIG_FIRST_PATCHES)
+    if unknown:
+        raise ValueError(f"Unknown Turbo patch names: {sorted(unknown)}")
+    return tuple(name for name in _CONFIG_FIRST_PATCHES if name in names)
+
+
+def get_patch_status() -> dict:
+    """Return the explicitly selected and successfully applied bootstrap groups."""
+    return dict(_PATCH_STATUS)
+
 
 def _npu_available() -> bool:
     """True when running on an Ascend NPU (torch_npu backend present)."""
@@ -65,10 +85,17 @@ def apply_all_patches():
     No-op (with a log line) when no Ascend NPU backend is available, so GPU/CPU
     runs that import torchtitanturbo are not affected by NPU-specific patches.
     """
-    if not _npu_available():
-        logger.info(
-            "torchtitanturbo: no Ascend NPU detected, skipping NPU patches"
+    selection = os.environ.get("TORCHTITAN_TURBO_PATCHES")
+    selected = _select_config_first_patches(selection)
+    previous = _PATCH_STATUS.get("applied", ())
+    if previous and tuple(previous) != selected:
+        raise RuntimeError(
+            "Patch A/B requires a fresh process; patches cannot be uninstalled"
         )
+    _PATCH_STATUS.update(selection=selection, selected=selected, applied=())
+    if not _npu_available():
+        _PATCH_STATUS["scope"] = "no_npu"
+        logger.info("torchtitanturbo: no Ascend NPU detected, skipping NPU patches")
         return
 
     set_environ_variable()
@@ -79,36 +106,55 @@ def apply_all_patches():
     # not partially install it against this API generation. GLM has a fully
     # migrated, independently validated patch and remains safe to install.
     if find_spec("torchtitan.distributed.compile") is None:
+        _PATCH_STATUS["scope"] = "config_first"
+        from torchtitanturbo.distributed.remat import apply_patch as apply_remat_patch
         from torchtitanturbo.models.common.npu_rope import (
             apply_patch as apply_rope_patch,
         )
-        from torchtitanturbo.distributed.remat import (
-            apply_patch as apply_remat_patch,
-        )
         from torchtitanturbo.models.glm5 import apply_glm5_patch
 
-        apply_remat_patch()
-        apply_rope_patch()
-        apply_glm5_patch()
+        applied = []
+        if "remat" in selected:
+            apply_remat_patch()
+            applied.append("remat")
+        if "rope" in selected:
+            apply_rope_patch()
+            applied.append("rope")
+        if "glm_init" in selected or "glm_loss" in selected:
+            apply_glm5_patch(
+                initialization="glm_init" in selected,
+                loss="glm_loss" in selected,
+            )
+            applied.extend(
+                name for name in ("glm_init", "glm_loss") if name in selected
+            )
+        _PATCH_STATUS["applied"] = tuple(applied)
         logger.warning(
-            "Detected config-first TorchTitan main: applied the migrated GLM "
-            "patch only; legacy common/distributed converters require a "
-            "separate upstream-API migration"
+            "Turbo config-first patch selection: %s; legacy converters are not loaded",
+            _PATCH_STATUS,
         )
         return
 
+    if selection is not None:
+        if selected:
+            raise ValueError(
+                "Explicit patch selection supports config-first TorchTitan only"
+            )
+        _PATCH_STATUS["scope"] = "legacy_disabled"
+        return
+
+    from torchtitanturbo.distributed import apply_fsdp_patch, apply_remat_patch
+    from torchtitanturbo.models import (
+        apply_deepseek_patch,
+        apply_glm5_patch,
+        apply_qwen3_patch,
+    )
+    from torchtitanturbo.models.common import apply_rope_patch
     from torchtitanturbo.tools import (
         apply_compile_patch,
         apply_graph_compat_patches,
         apply_profiler_patch,
         apply_utils_patch,
-    )
-    from torchtitanturbo.distributed import apply_fsdp_patch, apply_remat_patch
-    from torchtitanturbo.models.common import apply_rope_patch
-    from torchtitanturbo.models import (
-        apply_deepseek_patch,
-        apply_glm5_patch,
-        apply_qwen3_patch,
     )
 
     # Patch order follows dependency direction: metrics/profiler/compile and

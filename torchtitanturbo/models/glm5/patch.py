@@ -156,9 +156,7 @@ def _npu_safe_loss_parallel_backward(
     )
     if ctx.reduction == "none":
         grad_output = grad_output.unsqueeze(-1)
-    grad_output = torch.where(
-        (labels != IGNORE_INDEX).unsqueeze(-1), grad_output, 0
-    )
+    grad_output = torch.where((labels != IGNORE_INDEX).unsqueeze(-1), grad_output, 0)
     grad_logits = (grad_input + torch.exp(log_probs)) * grad_output
     return grad_logits.to(ctx.logits_dtype), None, None, None, None
 
@@ -252,20 +250,21 @@ def _patch_glm5_param_initializers(glm5_module) -> None:
             continue
 
         def factory(*args, _factory=current_factory, **kwargs):
-            return _replace_trunc_normal_initializers(
-                _factory(*args, **kwargs)
-            )
+            return _replace_trunc_normal_initializers(_factory(*args, **kwargs))
 
         factory._torchtitanturbo_npu_init_patched = True
         setattr(glm5_module, name, factory)
 
 
-def apply_patch() -> None:
-    """Install all GLM NPU contracts once, leaving GPU/CPU imports untouched."""
+def apply_patch(*, initialization: bool = True, loss: bool = True) -> None:
+    """Install the selected GLM contracts for process-isolated patch A/B."""
     from torchtitan.models.glm5 import flavors
 
-    _patch_vocab_parallel_loss()
-    if getattr(flavors, "_torchtitanturbo_glm5_npu_patched", False):
+    if loss:
+        _patch_vocab_parallel_loss()
+    if not initialization or getattr(
+        flavors, "_torchtitanturbo_glm5_npu_patched", False
+    ):
         return
     _patch_glm5_param_initializers(flavors)
     flavors._torchtitanturbo_glm5_npu_patched = True
