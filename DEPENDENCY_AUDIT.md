@@ -69,6 +69,9 @@ The default-off scheduler bridge addresses an observed Torch 2.15/TorchNPU
 interface mismatch, not a GLM algorithm. Its presence must be recorded even on
 the legacy-free endpoint. Native-op acceptance does not validate Inductor
 code generation; complete forward/backward remains a separate requirement.
+The independently selected `inductor_reduction` bridge accepts only the new
+`strict_reduction=False` keyword and delegates to the unchanged NPU factory.
+`True` fails explicitly. Both bridges remain outside the default patch set.
 
 GLM DSA test-branch audit against TorchTitan `8ac999e8`: sparse attention and
 index sharing remain upstream-owned. See `torchtitanturbo/models/glm5/DSA.md`

@@ -116,11 +116,6 @@ def apply_all_patches():
         from torchtitanturbo.models.glm5 import apply_glm5_patch
 
         applied = []
-        if "inductor_reduction" in selected:
-            from torchtitanturbo.tools.inductor_reduction import apply_patch
-
-            if apply_patch():
-                applied.append("inductor_reduction")
         if "inductor_scheduler" in selected:
             from torchtitanturbo.tools.inductor_scheduler import apply_patch
 
@@ -128,6 +123,11 @@ def apply_all_patches():
                 applied.append("inductor_scheduler")
             else:
                 _PATCH_STATUS["not_required"] = ("inductor_scheduler",)
+        if "inductor_reduction" in selected:
+            from torchtitanturbo.tools.inductor_reduction import apply_patch
+
+            if apply_patch():
+                applied.append("inductor_reduction")
         if "remat" in selected:
             apply_remat_patch()
             applied.append("remat")
