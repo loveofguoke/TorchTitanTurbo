@@ -7,7 +7,7 @@ import torch
 
 from torchtitan.config.parallelism import ParallelismConfig
 from torchtitan.config.transform import apply_transforms
-from torchtitan.models.glm5 import build_model_config
+from torchtitan_recipes.tests.models.glm5_configs import resolve_model_config as build_model_config
 from torchtitan.models.glm5.dsa import DsaMetadata, Glm5SparseAttention
 from torchtitan_recipes.tests.models.glm5 import glm5_debugmodel
 from torchtitanturbo.models.glm5.attention import (

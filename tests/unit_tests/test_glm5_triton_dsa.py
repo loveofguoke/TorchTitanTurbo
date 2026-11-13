@@ -6,7 +6,7 @@ import torch
 
 from torchtitan.config import OverrideConfig, apply_overrides
 from torchtitan.config.parallelism import ParallelismConfig
-from torchtitan.models.glm5 import build_model_config
+from torchtitan_recipes.tests.models.glm5_configs import resolve_model_config as build_model_config
 from torchtitan.models.glm5.dsa import Glm5AllGatherKVFlexAttention
 from torchtitanturbo.models.glm5.ops.triton_dsa import (
     TritonDsaAttention,

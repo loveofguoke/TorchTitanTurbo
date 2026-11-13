@@ -99,6 +99,14 @@ Other model forks are independent review scopes. A GLM change must not
 opportunistically rewrite Qwen, DeepSeek, or Llama patches.
 ## Gathered GLM attention migration
 
+The 2026-11-13 test-flavor move keeps debugmodel/scaled configurations in
+torchtitan_recipes.tests.models.glm5_configs, outside production MODEL_FLAVORS.
+GLM patch/prototype tests resolve their historical names through that registry;
+initializer ownership and runtime patch targets do not move. These import-only
+updates do not repair the older Flex/dense-mask prototype APIs described below
+or establish support for the new absorbed/KL-only execution on NPU. Validate
+the current upstream + Turbo adapter separately before migrating to Ascend.
+
 TorchTitan `78994ad9a` changes the default GLM inner backend to selected-key
 Attention Gym gather. Its portable reference is a correctness implementation,
 not the NPU training backend. `NpuGlm5FlexTransform` explicitly replaces the

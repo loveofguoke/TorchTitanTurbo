@@ -7,7 +7,7 @@ from unittest.mock import patch
 import torch
 
 from torchtitan.config.parallelism import ParallelismConfig
-from torchtitan.models.glm5 import build_model_config
+from torchtitan_recipes.tests.models.glm5_configs import resolve_model_config as build_model_config
 from torchtitanturbo.models.glm5.patch import (
     _local_vocab_labels,
     _npu_safe_trunc_normal_,
